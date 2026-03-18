@@ -145,6 +145,38 @@ class CronJobConfig(BaseModel):
     chat_id: str | None = None  # 结果发送目标
 
 
+class HeartbeatConfig(BaseModel):
+    """Heartbeat 服务配置"""
+
+    enabled: bool = Field(default=False, description="是否启用 Heartbeat")
+    every: str = Field(default="30m", description="执行间隔，如 '30m', '1h', '2h30m'")
+    active_hours: str | None = Field(
+        default=None,
+        description="活跃时段，如 '09:00-18:00'，仅在此时段内执行",
+    )
+    target: str | None = Field(
+        default=None,
+        description="结果投递目标：'last' 投递到上次交互渠道，或 'channel:chat_id' 指定渠道",
+    )
+    timeout: int = Field(default=120, description="执行超时时间（秒）")
+
+
+class HeartbeatConfig(BaseModel):
+    """Heartbeat 服务配置"""
+
+    enabled: bool = Field(default=False, description="是否启用 Heartbeat")
+    every: str = Field(default="30m", description="执行间隔，如 '30m', '1h', '2h30m'")
+    active_hours: str | None = Field(
+        default=None,
+        description="活跃时段，如 '09:00-18:00'，仅在此时段内执行",
+    )
+    target: str | None = Field(
+        default=None,
+        description="结果投递目标：'last' 投递到上次交互渠道，或 'channel:chat_id' 指定渠道",
+    )
+    timeout: int = Field(default=120, description="执行超时时间（秒）")
+
+
 class CronConfig(BaseModel):
     """Cron 服务配置"""
 
@@ -176,7 +208,6 @@ class ServicesConfig(BaseModel):
 
     health_enabled: bool = False
     health_port: int = 8081
-    heartbeat_interval: int = 60
     metrics_enabled: bool = False
     metrics_port: int = 9090
 
@@ -220,6 +251,7 @@ class Config(BaseModel):
     channels: ChannelConfig = Field(default_factory=ChannelConfig)
     async_subagents: list[AsyncSubAgentConfig] = Field(default_factory=list)
     cron: CronConfig = Field(default_factory=CronConfig)
+    heartbeat: HeartbeatConfig = Field(default_factory=HeartbeatConfig)
     services: ServicesConfig = Field(default_factory=ServicesConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
     langsmith: LangSmithConfig = Field(default_factory=LangSmithConfig)

@@ -1,91 +1,61 @@
 """Cron 服务
 
 定时任务调度和执行。
+
+与 HeartbeatService 类似，作为消息触发源，通过 on_execute 回调调用 Agent，
+结果通过 MessageBus 投递到配置的渠道。
 """
+
+from __future__ import annotations
 
 import asyncio
 import json
 import uuid
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable, Coroutine
+from typing import TYPE_CHECKING, Any, Callable, Coroutine
 
 from loguru import logger
 
 from deepcobot.cron.types import (
     CronJob,
-    CronSchedule,
-    CronPayload,
-    CronJobState,
-    _now_ms,
-    parse_interval,
+    compute_next_run,
 )
 
-# 可选导入 croniter
-try:
-    from croniter import croniter
-except ImportError:
-    croniter = None
-
-
-def _compute_next_run(schedule: CronSchedule, now_ms: int) -> int | None:
-    """
-    计算下次执行时间。
-
-    Args:
-        schedule: 调度配置
-        now_ms: 当前时间戳（毫秒）
-
-    Returns:
-        下次执行时间戳（毫秒），或 None 表示不再执行
-    """
-    if schedule.kind == "at":
-        return schedule.at_ms if schedule.at_ms and schedule.at_ms > now_ms else None
-
-    if schedule.kind == "every":
-        if not schedule.every_ms or schedule.every_ms <= 0:
-            return None
-        return now_ms + schedule.every_ms
-
-    if schedule.kind == "cron" and schedule.expr and croniter:
-        try:
-            cron = croniter(schedule.expr, datetime.now())
-            next_time = cron.get_next(datetime)
-            return int(next_time.timestamp() * 1000)
-        except Exception:
-            return None
-
-    return None
+if TYPE_CHECKING:
+    from deepcobot.bus.queue import MessageBus
 
 
 class CronService:
     """
     定时任务服务。
 
-    支持三种调度模式：
-    - at: 一次性执行
-    - every: 间隔执行
-    - cron: Cron 表达式
+    作为消息触发源，类似于 HeartbeatService。
+    通过 on_execute 回调调用 Agent，结果通过 MessageBus 投递。
 
     Attributes:
         store_path: 任务存储文件路径
-        on_job: 任务执行回调函数
+        bus: 消息总线
+        on_execute: 任务执行回调函数
     """
 
     def __init__(
         self,
         store_path: Path,
-        on_job: Callable[[CronJob], Coroutine[Any, Any, str | None]] | None = None,
+        bus: "MessageBus | None" = None,
+        on_execute: Callable[[str, str, str], Coroutine[Any, Any, str]] | None = None,
     ):
         """
         初始化 Cron 服务。
 
         Args:
             store_path: 任务存储文件路径
-            on_job: 任务执行回调函数
+            bus: 消息总线（可选，用于结果投递）
+            on_execute: 任务执行回调，接收 (message, session_key, channel) 返回响应
         """
         self.store_path = Path(store_path).expanduser()
-        self.on_job = on_job
+        self.bus = bus
+        self.on_execute = on_execute
         self._jobs: list[CronJob] = []
         self._timer_task: asyncio.Task | None = None
         self._running = False
@@ -96,7 +66,7 @@ class CronService:
             return
 
         try:
-            data = json.loads(self.store_path.read_text())
+            data = json.loads(self.store_path.read_text(encoding="utf-8"))
             jobs_data = data.get("jobs", [])
             self._jobs = [CronJob.from_dict(j) for j in jobs_data]
             logger.info(f"Loaded {len(self._jobs)} cron jobs")
@@ -111,38 +81,41 @@ class CronService:
             "version": 1,
             "jobs": [j.to_dict() for j in self._jobs],
         }
-        self.store_path.write_text(json.dumps(data, indent=2))
+        self.store_path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
 
     async def start(self) -> None:
         """启动定时任务服务"""
         self._running = True
         self._load_jobs()
-        self._recompute_next_runs()
+
+        # 计算所有启用任务的下次执行时间
+        now = datetime.now()
+        for job in self._jobs:
+            if job.enabled:
+                job.next_run_at = compute_next_run(job.schedule, now)
+
         self._save_jobs()
         self._arm_timer()
         logger.info(f"Cron service started with {len(self._jobs)} jobs")
 
-    def stop(self) -> None:
+    async def stop(self) -> None:
         """停止定时任务服务"""
         self._running = False
         if self._timer_task:
             self._timer_task.cancel()
+            try:
+                await self._timer_task
+            except asyncio.CancelledError:
+                pass
             self._timer_task = None
         logger.info("Cron service stopped")
 
-    def _recompute_next_runs(self) -> None:
-        """重新计算所有任务的下次执行时间"""
-        now = _now_ms()
-        for job in self._jobs:
-            if job.enabled:
-                job.state.next_run_at_ms = _compute_next_run(job.schedule, now)
-
-    def _get_next_wake_ms(self) -> int | None:
+    def _get_next_wake_time(self) -> datetime | None:
         """获取最近的执行时间"""
         times = [
-            j.state.next_run_at_ms
+            j.next_run_at
             for j in self._jobs
-            if j.enabled and j.state.next_run_at_ms
+            if j.enabled and j.next_run_at
         ]
         return min(times) if times else None
 
@@ -150,16 +123,24 @@ class CronService:
         """设置下次执行的定时器"""
         if self._timer_task:
             self._timer_task.cancel()
+            self._timer_task = None
 
-        next_wake = self._get_next_wake_ms()
-        if not next_wake or not self._running:
+        if not self._running:
             return
 
-        delay_ms = max(0, next_wake - _now_ms())
-        delay_s = delay_ms / 1000
+        next_wake = self._get_next_wake_time()
+        if not next_wake:
+            return
+
+        now = datetime.now()
+        if next_wake <= now:
+            # 已经过期，立即执行
+            delay = 0
+        else:
+            delay = (next_wake - now).total_seconds()
 
         async def tick():
-            await asyncio.sleep(delay_s)
+            await asyncio.sleep(delay)
             if self._running:
                 await self._on_timer()
 
@@ -167,14 +148,15 @@ class CronService:
 
     async def _on_timer(self) -> None:
         """定时器触发，执行到期的任务"""
-        now = _now_ms()
+        now = datetime.now()
         due_jobs = [
             j for j in self._jobs
-            if j.enabled and j.state.next_run_at_ms and now >= j.state.next_run_at_ms
+            if j.enabled and j.next_run_at and now >= j.next_run_at
         ]
 
         for job in due_jobs:
-            await self._execute_job(job)
+            # 并行执行任务
+            asyncio.create_task(self._execute_job(job))
 
         self._save_jobs()
         self._arm_timer()
@@ -186,24 +168,50 @@ class CronService:
         Args:
             job: 任务对象
         """
-        start_ms = _now_ms()
         logger.info(f"Cron: executing job '{job.name}' ({job.id})")
 
         try:
-            if self.on_job:
-                await self.on_job(job)
-            job.state.last_status = "ok"
-            job.state.last_error = None
+            if self.on_execute:
+                session_key = f"cron:{job.id}"
+                channel = job.channel or "cron"
+
+                response = await asyncio.wait_for(
+                    self.on_execute(job.message, session_key, channel),
+                    timeout=job.timeout,
+                )
+
+                # 如果有响应且配置了投递目标，通过 MessageBus 投递
+                if response and self.bus and job.channel and job.chat_id:
+                    from deepcobot.channels.events import OutboundMessage
+                    await self.bus.publish_outbound(OutboundMessage(
+                        channel=job.channel,
+                        chat_id=job.chat_id,
+                        content=response,
+                    ))
+                    logger.info(f"Cron: job '{job.name}' completed, dispatched to {job.channel}:{job.chat_id}")
+                else:
+                    logger.info(f"Cron: job '{job.name}' completed (no dispatch)")
+
+                job.last_status = "ok"
+                job.last_error = None
+            else:
+                logger.warning(f"Cron: no on_execute callback for job '{job.name}'")
+                job.last_status = "error"
+                job.last_error = "No execution callback"
+
+        except asyncio.TimeoutError:
+            logger.warning(f"Cron: job '{job.name}' timed out after {job.timeout}s")
+            job.last_status = "error"
+            job.last_error = f"Timeout after {job.timeout}s"
         except Exception as e:
-            job.state.last_status = "error"
-            job.state.last_error = str(e)
             logger.error(f"Cron: job '{job.name}' failed: {e}")
+            job.last_status = "error"
+            job.last_error = str(e)
 
-        job.state.last_run_at_ms = start_ms
-        job.updated_at_ms = _now_ms()
+        job.last_run_at = datetime.now()
+        job.next_run_at = compute_next_run(job.schedule, datetime.now())
 
-        # 更新下次执行时间
-        job.state.next_run_at_ms = _compute_next_run(job.schedule, _now_ms())
+        self._save_jobs()
 
     # ========== 公共 API ==========
 
@@ -218,44 +226,60 @@ class CronService:
             任务列表（按下次执行时间排序）
         """
         jobs = self._jobs if include_disabled else [j for j in self._jobs if j.enabled]
-        return sorted(jobs, key=lambda j: j.state.next_run_at_ms or float("inf"))
+        return sorted(jobs, key=lambda j: j.next_run_at or datetime.max)
+
+    def get_job(self, job_id: str) -> CronJob | None:
+        """
+        获取指定任务。
+
+        Args:
+            job_id: 任务 ID
+
+        Returns:
+            任务对象或 None
+        """
+        for job in self._jobs:
+            if job.id == job_id:
+                return job
+        return None
 
     def add_job(
         self,
         name: str,
-        schedule: CronSchedule,
+        schedule: str,
         message: str,
         channel: str | None = None,
         chat_id: str | None = None,
+        timeout: int = 120,
+        enabled: bool = True,
     ) -> CronJob:
         """
         添加新任务。
 
         Args:
             name: 任务名称
-            schedule: 调度配置
+            schedule: 调度表达式（cron 或 every 间隔）
             message: 发送给 Agent 的消息
             channel: 结果发送渠道
             chat_id: 结果发送目标
+            timeout: 执行超时（秒）
+            enabled: 是否启用
 
         Returns:
             新创建的任务
         """
-        now = _now_ms()
+        now = datetime.now()
 
         job = CronJob(
             id=str(uuid.uuid4())[:8],
             name=name,
-            enabled=True,
+            enabled=enabled,
             schedule=schedule,
-            payload=CronPayload(
-                message=message,
-                channel=channel,
-                chat_id=chat_id,
-            ),
-            state=CronJobState(next_run_at_ms=_compute_next_run(schedule, now)),
-            created_at_ms=now,
-            updated_at_ms=now,
+            message=message,
+            channel=channel,
+            chat_id=chat_id,
+            timeout=timeout,
+            next_run_at=compute_next_run(schedule, now) if enabled else None,
         )
 
         self._jobs.append(job)
@@ -263,6 +287,55 @@ class CronService:
         self._arm_timer()
 
         logger.info(f"Cron: added job '{name}' ({job.id})")
+        return job
+
+    def update_job(
+        self,
+        job_id: str,
+        name: str | None = None,
+        schedule: str | None = None,
+        message: str | None = None,
+        channel: str | None = None,
+        chat_id: str | None = None,
+        timeout: int | None = None,
+    ) -> CronJob | None:
+        """
+        更新任务。
+
+        Args:
+            job_id: 任务 ID
+            name: 新名称
+            schedule: 新调度
+            message: 新消息
+            channel: 新渠道
+            chat_id: 新目标
+            timeout: 新超时
+
+        Returns:
+            更新后的任务或 None
+        """
+        job = self.get_job(job_id)
+        if not job:
+            return None
+
+        if name is not None:
+            job.name = name
+        if schedule is not None:
+            job.schedule = schedule
+            job.next_run_at = compute_next_run(schedule, datetime.now()) if job.enabled else None
+        if message is not None:
+            job.message = message
+        if channel is not None:
+            job.channel = channel
+        if chat_id is not None:
+            job.chat_id = chat_id
+        if timeout is not None:
+            job.timeout = timeout
+
+        self._save_jobs()
+        self._arm_timer()
+
+        logger.info(f"Cron: updated job '{job.name}' ({job.id})")
         return job
 
     def remove_job(self, job_id: str) -> bool:
@@ -288,26 +361,29 @@ class CronService:
 
     def enable_job(self, job_id: str) -> bool:
         """启用任务"""
-        for job in self._jobs:
-            if job.id == job_id:
-                job.enabled = True
-                job.state.next_run_at_ms = _compute_next_run(job.schedule, _now_ms())
-                job.updated_at_ms = _now_ms()
-                self._save_jobs()
-                self._arm_timer()
-                return True
-        return False
+        job = self.get_job(job_id)
+        if not job:
+            return False
+
+        job.enabled = True
+        job.next_run_at = compute_next_run(job.schedule, datetime.now())
+        self._save_jobs()
+        self._arm_timer()
+        logger.info(f"Cron: enabled job '{job.name}' ({job.id})")
+        return True
 
     def disable_job(self, job_id: str) -> bool:
         """禁用任务"""
-        for job in self._jobs:
-            if job.id == job_id:
-                job.enabled = False
-                job.updated_at_ms = _now_ms()
-                self._save_jobs()
-                self._arm_timer()
-                return True
-        return False
+        job = self.get_job(job_id)
+        if not job:
+            return False
+
+        job.enabled = False
+        job.next_run_at = None
+        self._save_jobs()
+        self._arm_timer()
+        logger.info(f"Cron: disabled job '{job.name}' ({job.id})")
+        return True
 
     def status(self) -> dict:
         """获取服务状态"""
@@ -315,22 +391,23 @@ class CronService:
             "running": self._running,
             "jobs": len(self._jobs),
             "enabled_jobs": len([j for j in self._jobs if j.enabled]),
-            "next_wake_at_ms": self._get_next_wake_ms(),
+            "next_wake": self._get_next_wake_time().isoformat() if self._get_next_wake_time() else None,
         }
 
     async def run_job_now(self, job_id: str) -> bool:
         """
-        立即执行任务。
+        立即执行任务（异步）。
 
         Args:
             job_id: 任务 ID
 
         Returns:
-            是否成功执行
+            是否成功触发
         """
-        for job in self._jobs:
-            if job.id == job_id:
-                await self._execute_job(job)
-                self._save_jobs()
-                return True
-        return False
+        job = self.get_job(job_id)
+        if not job:
+            return False
+
+        asyncio.create_task(self._execute_job(job))
+        logger.info(f"Cron: manually triggered job '{job.name}' ({job.id})")
+        return True

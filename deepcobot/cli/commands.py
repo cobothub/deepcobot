@@ -578,31 +578,13 @@ def cron_list(
     table.add_column(t("cron.table_status", lang), style="magenta")
     table.add_column(t("cron.table_next_run", lang), style="blue")
 
-    from datetime import datetime
-
     for job in jobs:
         status = f"[green]{t('cron.enabled', lang)}[/green]" if job.enabled else f"[red]{t('cron.disabled', lang)}[/red]"
         next_run = "-"
-        if job.state.next_run_at_ms:
-            next_run = datetime.fromtimestamp(
-                job.state.next_run_at_ms / 1000
-            ).strftime("%Y-%m-%d %H:%M:%S")
+        if job.next_run_at:
+            next_run = job.next_run_at.strftime("%Y-%m-%d %H:%M:%S")
 
-        schedule_str = ""
-        if job.schedule.kind == "cron":
-            schedule_str = f"cron: {job.schedule.expr}"
-        elif job.schedule.kind == "every":
-            seconds = (job.schedule.every_ms or 0) // 1000
-            if seconds >= 3600:
-                schedule_str = f"{t('cron.every', lang)} {seconds // 3600}h"
-            elif seconds >= 60:
-                schedule_str = f"{t('cron.every', lang)} {seconds // 60}m"
-            else:
-                schedule_str = f"{t('cron.every', lang)} {seconds}s"
-        else:
-            schedule_str = t("cron.once", lang)
-
-        table.add_row(job.id, job.name, schedule_str, status, next_run)
+        table.add_row(job.id, job.name, job.schedule, status, next_run)
 
     console.print(table)
 
@@ -615,22 +597,28 @@ def cron_add(
         None,
         "--every",
         "-e",
-        help="Interval",
+        help="Interval (e.g., 30m, 1h, 1d)",
     ),
     cron: Optional[str] = typer.Option(
         None,
         "--cron",
-        help="Cron expr",
+        help="Cron expression (5 fields)",
     ),
     channel: Optional[str] = typer.Option(
         None,
         "--channel",
-        help="Channel",
+        help="Channel to dispatch results (e.g., telegram, discord)",
     ),
     chat_id: Optional[str] = typer.Option(
         None,
         "--chat-id",
-        help="Chat ID",
+        help="Chat ID to dispatch results",
+    ),
+    timeout: int = typer.Option(
+        120,
+        "--timeout",
+        "-t",
+        help="Execution timeout in seconds",
     ),
     config: Optional[Path] = typer.Option(
         None,
@@ -643,20 +631,10 @@ def cron_add(
     lang = _setup_language(config)
 
     cfg = load_config(config)
-    from deepcobot.cron import CronService, CronSchedule, parse_interval
+    from deepcobot.cron import CronService
 
-    schedule = CronSchedule(kind="every", every_ms=3600000)
-
-    if every:
-        try:
-            every_ms = parse_interval(every)
-            schedule = CronSchedule(kind="every", every_ms=every_ms)
-        except ValueError as e:
-            console.print(f"[red]{t('cron.invalid_interval', lang)}[/red] {e}")
-            raise typer.Exit(1)
-
-    if cron:
-        schedule = CronSchedule(kind="cron", expr=cron)
+    # 确定调度表达式
+    schedule = every or cron or "1h"
 
     service = CronService(cfg.cron.store_path)
 
@@ -668,10 +646,14 @@ def cron_add(
             message=message,
             channel=channel,
             chat_id=chat_id,
+            timeout=timeout,
         )
         console.print(f"[green]{t('cron.created', lang)}[/green] {job.id}")
         console.print(f"  Name: {job.name}")
-        console.print(f"  Message: {job.payload.message}")
+        console.print(f"  Schedule: {job.schedule}")
+        console.print(f"  Message: {job.message}")
+        if job.channel:
+            console.print(f"  Dispatch: {job.channel}:{job.chat_id}")
 
     asyncio.run(add())
 
@@ -775,17 +757,28 @@ async def _run_bot(cfg, lang: Language) -> None:
     from deepcobot.agent.core import _create_agent_async
     from deepcobot.bus.queue import MessageBus
     from deepcobot.channels import ChannelManager, InboundMessage, OutboundMessage
+    from deepcobot.cron import CronService, HeartbeatService
 
     # 创建 Agent
     resources = await _create_agent_async(cfg)
     graph = resources["graph"]
+    workspace = resources["workspace"]
 
     # 创建消息总线
     bus = MessageBus()
 
+    # 记录上次交互渠道
+    last_dispatch: dict[str, str] = {}
+
     # Agent 消息处理函数
     async def agent_handler(msg: InboundMessage) -> OutboundMessage | None:
         """处理入站消息并返回响应"""
+        nonlocal last_dispatch
+
+        # 记录上次交互渠道（排除 heartbeat 自身）
+        if msg.channel != "heartbeat":
+            last_dispatch = {"channel": msg.channel, "chat_id": msg.chat_id}
+
         thread_config = {
             "configurable": {
                 "thread_id": msg.chat_id,
@@ -847,6 +840,106 @@ async def _run_bot(cfg, lang: Language) -> None:
     for name, channel in manager.channels.items():
         console.print(f"  • {name}")
 
+    # Heartbeat 回调
+    async def on_heartbeat_execute(content: str, session_key: str, channel: str) -> str:
+        """Heartbeat 执行回调"""
+        thread_config = {
+            "configurable": {
+                "thread_id": session_key,
+            }
+        }
+
+        try:
+            result = await graph.ainvoke(
+                {"messages": [{"role": "user", "content": content}]},
+                config=thread_config,
+            )
+
+            # 提取响应
+            response = ""
+            if "messages" in result:
+                for m in reversed(result["messages"]):
+                    msg_type = type(m).__name__
+                    if msg_type == "AIMessage":
+                        response = str(m.content or "")
+                        if isinstance(m.content, list):
+                            texts = []
+                            for item in m.content:
+                                if isinstance(item, dict) and item.get("type") == "text":
+                                    texts.append(item.get("text", ""))
+                            response = "\n".join(texts) if texts else ""
+                        break
+                    elif isinstance(m, dict) and m.get("role") == "assistant":
+                        response = m.get("content", "") or ""
+                        break
+
+            return response
+
+        except Exception as e:
+            logger.error(f"Heartbeat agent error: {e}")
+            return ""
+
+    def get_last_dispatch() -> tuple[str, str] | None:
+        """获取上次交互渠道"""
+        if last_dispatch:
+            return last_dispatch.get("channel"), last_dispatch.get("chat_id")
+        return None
+
+    # Cron 执行回调
+    async def on_cron_execute(message: str, session_key: str, channel: str) -> str:
+        """Cron 任务执行回调"""
+        thread_config = {
+            "configurable": {
+                "thread_id": session_key,
+            }
+        }
+
+        try:
+            result = await graph.ainvoke(
+                {"messages": [{"role": "user", "content": message}]},
+                config=thread_config,
+            )
+
+            # 提取响应
+            response = ""
+            if "messages" in result:
+                for m in reversed(result["messages"]):
+                    msg_type = type(m).__name__
+                    if msg_type == "AIMessage":
+                        response = str(m.content or "")
+                        if isinstance(m.content, list):
+                            texts = []
+                            for item in m.content:
+                                if isinstance(item, dict) and item.get("type") == "text":
+                                    texts.append(item.get("text", ""))
+                            response = "\n".join(texts) if texts else ""
+                        break
+                    elif isinstance(m, dict) and m.get("role") == "assistant":
+                        response = m.get("content", "") or ""
+                        break
+
+            return response
+
+        except Exception as e:
+            logger.error(f"Cron agent error: {e}")
+            return ""
+
+    # 创建 Heartbeat 服务
+    heartbeat = HeartbeatService(
+        workspace=workspace,
+        bus=bus,
+        config=cfg.heartbeat,
+        on_execute=on_heartbeat_execute,
+        get_last_dispatch=get_last_dispatch,
+    )
+
+    # 创建 Cron 服务
+    cron = CronService(
+        store_path=cfg.cron.store_path,
+        bus=bus,
+        on_execute=on_cron_execute,
+    )
+
     # 设置信号处理
     loop = asyncio.get_event_loop()
     stop_event = asyncio.Event()
@@ -883,10 +976,27 @@ async def _run_bot(cfg, lang: Language) -> None:
         task = asyncio.create_task(manager._start_channel(name, channel))
         channel_tasks.append(task)
 
+    # 启动 Heartbeat 服务
+    await heartbeat.start()
+    if cfg.heartbeat.enabled:
+        console.print(f"  • heartbeat (every {cfg.heartbeat.every})")
+
+    # 启动 Cron 服务
+    await cron.start()
+    enabled_jobs = len([j for j in cron.list_jobs() if j.enabled])
+    if enabled_jobs > 0:
+        console.print(f"  • cron ({enabled_jobs} jobs)")
+
     console.print(f"[dim]{t('serve.ctrlc', lang)}[/dim]")
 
     # 等待停止信号
     await stop_event.wait()
+
+    # 停止 Cron
+    await cron.stop()
+
+    # 停止 Heartbeat
+    await heartbeat.stop()
 
     # 取消渠道任务
     for task in channel_tasks:

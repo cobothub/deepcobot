@@ -155,15 +155,36 @@ store_path = "~/.deepcobot/cron_jobs.json"
 # every = "1h"  # Execute every hour
 # message = "Check system status"
 
+# ==================== Heartbeat Configuration ====================
+# Heartbeat periodically reads HEARTBEAT.md and triggers the agent to execute tasks
+# Create ~/.deepcobot/workspace/HEARTBEAT.md with your periodic tasks
+
+[heartbeat]
+# Enable heartbeat service
+enabled = false
+
+# Execution interval: supports "30m", "1h", "2h30m", "90s"
+every = "30m"
+
+# Active hours: only execute during this time range (optional)
+# Format: "HH:MM-HH:MM", uses system timezone
+# active_hours = "09:00-18:00"
+
+# Result dispatch target (optional):
+# - "last": dispatch to last interaction channel (non-CLI)
+# - "channel:chat_id": dispatch to specific channel, e.g., "telegram:123456789"
+# - empty or not set: no dispatch (just execute silently)
+# target = "last"
+
+# Execution timeout (seconds)
+timeout = 120
+
 # ==================== Service Configuration ====================
 
 [services]
 # Health check endpoint
 health_enabled = false
 health_port = 8081
-
-# Heartbeat check interval (seconds)
-heartbeat_interval = 60
 
 # Prometheus metrics endpoint
 metrics_enabled = false

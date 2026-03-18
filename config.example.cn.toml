@@ -155,15 +155,36 @@ store_path = "~/.deepcobot/cron_jobs.json"
 # every = "1h"  # 每小时执行
 # message = "检查系统状态"
 
+# ==================== Heartbeat 配置 ====================
+# Heartbeat 定期读取 HEARTBEAT.md 并触发 Agent 执行任务
+# 在 ~/.deepcobot/workspace/HEARTBEAT.md 中写入你的定期任务
+
+[heartbeat]
+# 是否启用 Heartbeat 服务
+enabled = false
+
+# 执行间隔：支持 "30m", "1h", "2h30m", "90s"
+every = "30m"
+
+# 活跃时段：仅在此时间范围内执行（可选）
+# 格式: "HH:MM-HH:MM"，使用系统时区
+# active_hours = "09:00-18:00"
+
+# 结果投递目标（可选）：
+# - "last": 投递到上次交互的渠道（非 CLI）
+# - "channel:chat_id": 投递到指定渠道，如 "telegram:123456789"
+# - 留空或不设置：不投递（静默执行）
+# target = "last"
+
+# 执行超时时间（秒）
+timeout = 120
+
 # ==================== 服务配置 ====================
 
 [services]
 # 健康检查端点
 health_enabled = false
 health_port = 8081
-
-# 心跳检测间隔（秒）
-heartbeat_interval = 60
 
 # Prometheus 指标端点
 metrics_enabled = false

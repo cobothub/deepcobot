@@ -8,6 +8,30 @@ from typing import Any, Callable, Awaitable, AsyncIterator
 
 from loguru import logger
 
+# HEARTBEAT 文件名常量
+HEARTBEAT_FILE = "HEARTBEAT.md"
+
+# 默认 HEARTBEAT.md 内容
+DEFAULT_HEARTBEAT_CONTENT = """# Heartbeat Tasks
+
+This file is read periodically by the Heartbeat service.
+Write your tasks here, and the agent will execute them on schedule.
+
+## Example Tasks
+
+<!-- Uncomment and modify the following lines to use: -->
+
+<!-- - Check the status of my daily backup -->
+<!-- - Generate a summary of today's calendar events -->
+<!-- - Review and clean up temporary files in the workspace -->
+
+## Notes
+
+- Tasks are executed according to the heartbeat interval configured in config.toml
+- Results can be dispatched to configured channels (Telegram, Discord, etc.)
+- Use clear, specific instructions for best results
+"""
+
 
 def _sanitize_string(s: str) -> str:
     """
@@ -105,6 +129,12 @@ def create_agent(config: Config) -> dict[str, Any]:
     (workspace / "memory").mkdir(exist_ok=True)
     (workspace / "skills").mkdir(exist_ok=True)
 
+    # 创建默认的 HEARTBEAT.md 文件（如果不存在）
+    heartbeat_path = workspace / HEARTBEAT_FILE
+    if not heartbeat_path.exists():
+        heartbeat_path.write_text(DEFAULT_HEARTBEAT_CONTENT, encoding="utf-8")
+        logger.info(f"Created default {HEARTBEAT_FILE} at {heartbeat_path}")
+
     logger.info(f"Initializing agent with workspace: {workspace}")
 
     system_prompt = _build_system_prompt(config)
@@ -197,6 +227,12 @@ async def _create_agent_async(config: Config) -> dict[str, Any]:
         workspace.mkdir(parents=True, exist_ok=True)
         (workspace / "memory").mkdir(exist_ok=True)
         (workspace / "skills").mkdir(exist_ok=True)
+
+        # 创建默认的 HEARTBEAT.md 文件（如果不存在）
+        heartbeat_path = workspace / HEARTBEAT_FILE
+        if not heartbeat_path.exists():
+            heartbeat_path.write_text(DEFAULT_HEARTBEAT_CONTENT, encoding="utf-8")
+            logger.info(f"Created default {HEARTBEAT_FILE} at {heartbeat_path}")
 
     await asyncio.to_thread(_ensure_workspace)
 

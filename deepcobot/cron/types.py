@@ -3,68 +3,17 @@
 定义定时任务的数据结构。
 """
 
+from __future__ import annotations
+
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
-
-@dataclass
-class CronSchedule:
-    """
-    调度配置。
-
-    支持三种调度模式：
-    - at: 一次性执行（指定时间戳）
-    - every: 间隔执行（指定间隔毫秒数）
-    - cron: Cron 表达式（5 字段）
-
-    Attributes:
-        kind: 调度类型（"at" | "every" | "cron"）
-        at_ms: 一次性执行时间戳（毫秒）
-        every_ms: 间隔执行间隔（毫秒）
-        expr: Cron 表达式（5 字段）
-        timezone: 时区（默认 UTC）
-    """
-
-    kind: str = "every"  # "at" | "every" | "cron"
-    at_ms: int | None = None
-    every_ms: int | None = None
-    expr: str | None = None
-    timezone: str = "UTC"
-
-
-@dataclass
-class CronPayload:
-    """
-    任务执行内容。
-
-    Attributes:
-        message: 发送给 Agent 的消息
-        channel: 结果发送渠道
-        chat_id: 结果发送目标
-    """
-
-    message: str = ""
-    channel: str | None = None
-    chat_id: str | None = None
-
-
-@dataclass
-class CronJobState:
-    """
-    任务运行状态。
-
-    Attributes:
-        next_run_at_ms: 下次执行时间戳（毫秒）
-        last_run_at_ms: 上次执行时间戳（毫秒）
-        last_status: 上次执行状态（"ok" | "error"）
-        last_error: 上次执行错误信息
-    """
-
-    next_run_at_ms: int | None = None
-    last_run_at_ms: int | None = None
-    last_status: str | None = None
-    last_error: str | None = None
+# 可选导入 croniter
+try:
+    from croniter import croniter
+except ImportError:
+    croniter = None
 
 
 @dataclass
@@ -76,21 +25,29 @@ class CronJob:
         id: 任务 ID
         name: 任务名称
         enabled: 是否启用
-        schedule: 调度配置
-        payload: 执行内容
-        state: 运行状态
-        created_at_ms: 创建时间戳（毫秒）
-        updated_at_ms: 更新时间戳（毫秒）
+        schedule: 调度表达式（cron 或 every）
+        message: 发送给 Agent 的消息
+        channel: 结果发送渠道
+        chat_id: 结果发送目标
+        timeout: 执行超时（秒）
+        next_run_at: 下次执行时间（datetime）
+        last_run_at: 上次执行时间（datetime）
+        last_status: 上次执行状态
+        last_error: 上次执行错误
     """
 
     id: str
     name: str
     enabled: bool = True
-    schedule: CronSchedule = field(default_factory=lambda: CronSchedule(kind="every"))
-    payload: CronPayload = field(default_factory=CronPayload)
-    state: CronJobState = field(default_factory=CronJobState)
-    created_at_ms: int = 0
-    updated_at_ms: int = 0
+    schedule: str = "1h"  # cron 表达式或 every 间隔
+    message: str = ""
+    channel: str | None = None
+    chat_id: str | None = None
+    timeout: int = 120
+    next_run_at: datetime | None = None
+    last_run_at: datetime | None = None
+    last_status: str | None = None  # "ok" | "error"
+    last_error: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """转换为字典"""
@@ -98,87 +55,84 @@ class CronJob:
             "id": self.id,
             "name": self.name,
             "enabled": self.enabled,
-            "schedule": {
-                "kind": self.schedule.kind,
-                "at_ms": self.schedule.at_ms,
-                "every_ms": self.schedule.every_ms,
-                "expr": self.schedule.expr,
-                "timezone": self.schedule.timezone,
-            },
-            "payload": {
-                "message": self.payload.message,
-                "channel": self.payload.channel,
-                "chat_id": self.payload.chat_id,
-            },
-            "state": {
-                "next_run_at_ms": self.state.next_run_at_ms,
-                "last_run_at_ms": self.state.last_run_at_ms,
-                "last_status": self.state.last_status,
-                "last_error": self.state.last_error,
-            },
-            "created_at_ms": self.created_at_ms,
-            "updated_at_ms": self.updated_at_ms,
+            "schedule": self.schedule,
+            "message": self.message,
+            "channel": self.channel,
+            "chat_id": self.chat_id,
+            "timeout": self.timeout,
+            "next_run_at": self.next_run_at.isoformat() if self.next_run_at else None,
+            "last_run_at": self.last_run_at.isoformat() if self.last_run_at else None,
+            "last_status": self.last_status,
+            "last_error": self.last_error,
         }
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "CronJob":
         """从字典创建"""
+        def parse_datetime(s: str | None) -> datetime | None:
+            if not s:
+                return None
+            try:
+                return datetime.fromisoformat(s)
+            except (ValueError, TypeError):
+                return None
+
         return cls(
             id=data["id"],
             name=data["name"],
             enabled=data.get("enabled", True),
-            schedule=CronSchedule(
-                kind=data.get("schedule", {}).get("kind", "every"),
-                at_ms=data.get("schedule", {}).get("at_ms"),
-                every_ms=data.get("schedule", {}).get("every_ms"),
-                expr=data.get("schedule", {}).get("expr"),
-                timezone=data.get("schedule", {}).get("timezone", "UTC"),
-            ),
-            payload=CronPayload(
-                message=data.get("payload", {}).get("message", ""),
-                channel=data.get("payload", {}).get("channel"),
-                chat_id=data.get("payload", {}).get("chat_id"),
-            ),
-            state=CronJobState(
-                next_run_at_ms=data.get("state", {}).get("next_run_at_ms"),
-                last_run_at_ms=data.get("state", {}).get("last_run_at_ms"),
-                last_status=data.get("state", {}).get("last_status"),
-                last_error=data.get("state", {}).get("last_error"),
-            ),
-            created_at_ms=data.get("created_at_ms", 0),
-            updated_at_ms=data.get("updated_at_ms", 0),
+            schedule=data.get("schedule", "1h"),
+            message=data.get("message", ""),
+            channel=data.get("channel"),
+            chat_id=data.get("chat_id"),
+            timeout=data.get("timeout", 120),
+            next_run_at=parse_datetime(data.get("next_run_at")),
+            last_run_at=parse_datetime(data.get("last_run_at")),
+            last_status=data.get("last_status"),
+            last_error=data.get("last_error"),
         )
-
-
-def _now_ms() -> int:
-    """获取当前时间戳（毫秒）"""
-    return int(datetime.now().timestamp() * 1000)
 
 
 def parse_interval(interval_str: str) -> int:
     """
-    解析间隔字符串为毫秒数。
+    解析间隔字符串为秒数。
 
     支持格式:
-    - "30s" -> 30000
-    - "5m" -> 300000
-    - "1h" -> 3600000
-    - "1d" -> 86400000
+    - "30s" -> 30
+    - "5m" -> 300
+    - "1h" -> 3600
+    - "1d" -> 86400
+    - "2h30m" -> 9000
 
     Args:
         interval_str: 间隔字符串
 
     Returns:
-        毫秒数
+        秒数
 
     Raises:
         ValueError: 格式无效
     """
-    interval_str = interval_str.strip().lower()
+    import re
 
+    interval_str = (interval_str or "").strip().lower()
     if not interval_str:
         raise ValueError("Empty interval string")
 
+    # 尝试解析复合格式如 "2h30m"
+    pattern = r'^(?:(?P<hours>\d+)h)?(?:(?P<minutes>\d+)m)?(?:(?P<seconds>\d+)s)?(?:(?P<days>\d+)d)?$'
+    match = re.match(pattern, interval_str)
+
+    if match:
+        hours = int(match.group("hours") or 0)
+        minutes = int(match.group("minutes") or 0)
+        seconds = int(match.group("seconds") or 0)
+        days = int(match.group("days") or 0)
+        total = days * 86400 + hours * 3600 + minutes * 60 + seconds
+        if total > 0:
+            return total
+
+    # 简单格式如 "30s", "5m"
     unit = interval_str[-1]
     try:
         value = int(interval_str[:-1])
@@ -186,13 +140,53 @@ def parse_interval(interval_str: str) -> int:
         raise ValueError(f"Invalid interval format: {interval_str}")
 
     multipliers = {
-        "s": 1000,
-        "m": 60 * 1000,
-        "h": 60 * 60 * 1000,
-        "d": 24 * 60 * 60 * 1000,
+        "s": 1,
+        "m": 60,
+        "h": 3600,
+        "d": 86400,
     }
 
     if unit not in multipliers:
         raise ValueError(f"Unknown time unit: {unit}")
 
     return value * multipliers[unit]
+
+
+def is_cron_expression(schedule: str) -> bool:
+    """判断是否为 cron 表达式"""
+    # cron 表达式有 5 个字段（分 时 日 月 周）
+    parts = schedule.strip().split()
+    return len(parts) == 5
+
+
+def compute_next_run(schedule: str, now: datetime | None = None) -> datetime | None:
+    """
+    计算下次执行时间。
+
+    Args:
+        schedule: 调度表达式（cron 或 every）
+        now: 当前时间，默认为 datetime.now()
+
+    Returns:
+        下次执行时间，或 None 表示无效
+    """
+    if now is None:
+        now = datetime.now()
+
+    # 尝试作为 cron 表达式解析
+    if is_cron_expression(schedule):
+        if croniter is None:
+            return None
+        try:
+            cron = croniter(schedule, now)
+            return cron.get_next(datetime)
+        except Exception:
+            return None
+
+    # 尝试作为间隔解析
+    try:
+        interval_seconds = parse_interval(schedule)
+        from datetime import timedelta
+        return now + timedelta(seconds=interval_seconds)
+    except ValueError:
+        return None

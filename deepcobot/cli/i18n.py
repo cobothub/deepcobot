@@ -477,6 +477,48 @@ TRANSLATIONS: dict[str, dict[Language, str]] = {
         "en": "Configuration Error:",
         "zh": "配置错误：",
     },
+
+    # Tool names
+    "tool.execute": {
+        "en": "Execute command",
+        "zh": "执行命令",
+    },
+    "tool.read_file": {
+        "en": "Read file",
+        "zh": "读取文件",
+    },
+    "tool.write_file": {
+        "en": "Write file",
+        "zh": "写入文件",
+    },
+    "tool.edit_file": {
+        "en": "Edit file",
+        "zh": "编辑文件",
+    },
+    "tool.glob": {
+        "en": "Search files",
+        "zh": "搜索文件",
+    },
+    "tool.grep": {
+        "en": "Search content",
+        "zh": "搜索内容",
+    },
+    "tool.web_search": {
+        "en": "Web search",
+        "zh": "网页搜索",
+    },
+    "tool.task": {
+        "en": "Run subtask",
+        "zh": "调用子任务",
+    },
+    "tool.write_todos": {
+        "en": "Update tasks",
+        "zh": "更新任务列表",
+    },
+    "tool.ls": {
+        "en": "List directory",
+        "zh": "列出目录",
+    },
 }
 
 

@@ -27,9 +27,9 @@ async def create_graph_async(config: Config | None = None) -> Any:
     if config is None:
         config = load_config()
 
-    from deepcobot.agent.core import _create_agent_async
+    from deepcobot.agent.factory import create_agent_async
 
-    agent_resources = await _create_agent_async(config)
+    agent_resources = await create_agent_async(config)
     return agent_resources["graph"]
 
 

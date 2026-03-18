@@ -1,5 +1,5 @@
 """CLI 模块"""
 
-from deepcobot.cli.commands import app
+from deepcobot.cli.app import app
 
 __all__ = ["app"]

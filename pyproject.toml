@@ -63,7 +63,7 @@ dev = [
 ]
 
 [project.scripts]
-deepcobot = "deepcobot.cli.commands:app"
+deepcobot = "deepcobot.cli.app:app"
 
 [project.urls]
 Homepage = "https://github.com/deepcobot/deepcobot"

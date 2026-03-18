@@ -1,11 +1,16 @@
 # DeepCoBot
 
-[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 中文文档 | [English](README.md)
 
 极简封装的个人 AI 助理框架，基于 [DeepAgents](https://github.com/langchain-ai/deepagents) 构建。
+
+## 系统要求
+
+- Python >= 3.11
+- DeepAgents SDK（需要 Python >= 3.11）
 
 ## 特性
 
@@ -19,19 +24,40 @@
 
 ### 安装
 
+**从源码安装（推荐）**
+
 ```bash
-# 基础安装
-pip install deepcobot
+# 克隆仓库
+git clone https://github.com/cobothub/deepcobot.git
+cd deepcobot
+
+# 创建虚拟环境（需要 Python 3.11+）
+python -m venv .venv
+source .venv/bin/activate  # Linux/macOS
+# .venv\Scripts\activate   # Windows
+
+# 开发模式安装
+pip install -e .
 
 # 安装特定渠道支持
-pip install deepcobot[telegram]    # Telegram
-pip install deepcobot[discord]     # Discord
-pip install deepcobot[feishu]      # 飞书
-pip install deepcobot[dingtalk]    # 钉钉
-pip install deepcobot[web]         # Web API
+pip install -e ".[telegram]"    # Telegram
+pip install -e ".[discord]"     # Discord
+pip install -e ".[feishu]"      # 飞书
+pip install -e ".[dingtalk]"    # 钉钉
+pip install -e ".[web]"         # Web API
 
 # 安装所有功能
-pip install deepcobot[all]
+pip install -e ".[all]"
+
+# 安装开发依赖
+pip install -e ".[dev]"
+```
+
+**从 PyPI 安装（即将发布）**
+
+```bash
+# 首次发布后可用
+pip install deepcobot
 ```
 
 ### 配置
@@ -165,7 +191,7 @@ docker-compose up -d
 
 ```bash
 # 克隆仓库
-git clone https://github.com/deepcobot/deepcobot.git
+git clone https://github.com/cobothub/deepcobot.git
 cd deepcobot
 
 # 安装开发依赖

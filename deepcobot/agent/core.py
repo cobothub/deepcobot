@@ -10,56 +10,85 @@ from loguru import logger
 
 from deepcobot.config import Config
 
+# 延迟导入，避免在未安装时立即报错
+_create_deep_agent = None
+_MemoryMiddleware = None
+_LocalShellBackend = None
+_AsyncSqliteSaver = None
+
+
+def _ensure_deepagents():
+    """确保 DeepAgents SDK 已安装并导入必要组件"""
+    global _create_deep_agent, _MemoryMiddleware, _LocalShellBackend, _AsyncSqliteSaver
+    if _create_deep_agent is None:
+        try:
+            from deepagents import create_deep_agent, MemoryMiddleware
+            from deepagents.backends import LocalShellBackend
+            from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
+
+            _create_deep_agent = create_deep_agent
+            _MemoryMiddleware = MemoryMiddleware
+            _LocalShellBackend = LocalShellBackend
+            _AsyncSqliteSaver = AsyncSqliteSaver
+        except ImportError as e:
+            raise ImportError(
+                "DeepAgents SDK not installed. "
+                "Install it with: pip install deepagents>=0.4 langgraph-checkpoint-sqlite"
+            ) from e
+    return _create_deep_agent, _MemoryMiddleware, _LocalShellBackend, _AsyncSqliteSaver
+
+
+async def _create_async_sqlite_checkpointer(db_path: str):
+    """
+    异步创建 SQLite Checkpointer。
+
+    Args:
+        db_path: SQLite 数据库文件路径
+
+    Returns:
+        AsyncSqliteSaver 实例
+    """
+    from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
+
+    # from_conn_string 是异步上下文管理器，返回 AsyncIterator
+    # 我们需要手动管理生命周期，这里先直接创建
+    import aiosqlite
+    conn = await aiosqlite.connect(db_path)
+    return AsyncSqliteSaver(conn)
+
 
 def create_agent(config: Config) -> dict[str, Any]:
     """
-    创建 Agent 实例。
+    创建 Agent 实例（同步版本，使用 MemorySaver）。
 
-    封装 DeepAgents SDK 的 create_deep_agent，根据配置构建中间件栈。
+    注意：推荐使用 _create_agent_async 进行异步操作以支持 SQLite 持久化。
 
     Args:
         config: 配置对象
 
     Returns:
         包含 graph 和相关资源的字典
-
-    Raises:
-        ImportError: DeepAgents SDK 未安装
-        ValueError: 配置验证失败
     """
-    try:
-        from deepagents import create_deep_agent
-        from deepagents.backends import LocalShellBackend
-        from deepagents.checkpointer import SqliteSaver
-    except ImportError as e:
-        raise ImportError(
-            "DeepAgents SDK not installed. "
-            "Install it with: pip install deepagents>=0.4"
-        ) from e
+    create_deep_agent, MemoryMiddleware, LocalShellBackend, _ = _ensure_deepagents()
+    from langgraph.checkpoint.memory import MemorySaver
 
     workspace = config.agent.workspace
     workspace.mkdir(parents=True, exist_ok=True)
-
-    # 创建必要的子目录
     (workspace / "memory").mkdir(exist_ok=True)
     (workspace / "skills").mkdir(exist_ok=True)
 
     logger.info(f"Initializing agent with workspace: {workspace}")
 
-    # 构建系统提示词
     system_prompt = _build_system_prompt(config)
-
-    # 创建 Shell 后端
     backend = LocalShellBackend(root_dir=str(workspace))
+    checkpointer = MemorySaver()  # 同步版本使用内存存储
 
-    # 创建 Checkpointer
-    checkpointer_path = workspace / "checkpoints.db"
-    checkpointer = SqliteSaver(str(checkpointer_path))
+    logger.info("Checkpointer: MemorySaver (non-persistent)")
 
-    # 构建中间件栈
     middlewares = _build_middlewares(config)
+    memory_sources = _build_memory_sources(config)
+    skills_sources = _build_skills_sources(config)
 
-    # 解析模型配置
     model = config.agent.model
     if ":" in model:
         provider, model_name = model.split(":", 1)
@@ -67,40 +96,138 @@ def create_agent(config: Config) -> dict[str, Any]:
         provider = "anthropic"
         model_name = model
 
-    # 获取提供商配置
     provider_config = config.get_provider(provider)
     api_key = provider_config.api_key if provider_config else None
     api_base = provider_config.api_base if provider_config else None
 
-    # 配置审批
-    interrupt_on = None if config.agent.auto_approve else [
-        "execute",
-        "write_file",
-        "edit_file",
-        "web_search",
-        "task",
-    ]
+    if api_key:
+        import os
+        if provider == "openai":
+            os.environ["OPENAI_API_KEY"] = api_key
+            if api_base:
+                os.environ["OPENAI_BASE_URL"] = api_base
+        else:
+            os.environ["ANTHROPIC_API_KEY"] = api_key
+            if api_base:
+                os.environ["ANTHROPIC_BASE_URL"] = api_base
 
-    # 构建异步子 Agent 列表
+    interrupt_on = None
+    if not config.agent.auto_approve:
+        interrupt_on = {
+            "execute": True,
+            "write_file": True,
+            "edit_file": True,
+            "web_search": True,
+            "task": True,
+        }
+
     async_subagents = _build_async_subagents(config)
 
-    # 创建 Agent
     agent_kwargs: dict[str, Any] = {
-        "model": model_name,
+        "model": model,
         "system_prompt": system_prompt,
         "backend": backend,
         "checkpointer": checkpointer,
-        "api_key": api_key,
-        "api_base": api_base,
-        "middlewares": middlewares,
+        "middleware": middlewares,
         "interrupt_on": interrupt_on,
+        "memory": memory_sources,
+        "skills": skills_sources,
     }
 
     if async_subagents:
-        agent_kwargs["async_subagents"] = async_subagents
+        agent_kwargs["subagents"] = async_subagents
 
     graph = create_deep_agent(**agent_kwargs)
+    logger.info(f"Agent created: model={model}, auto_approve={config.agent.auto_approve}")
 
+    return {
+        "graph": graph,
+        "checkpointer": checkpointer,
+        "backend": backend,
+        "workspace": workspace,
+    }
+
+
+async def _create_agent_async(config: Config) -> dict[str, Any]:
+    """
+    异步创建 Agent 实例（支持 SQLite 持久化）。
+
+    Args:
+        config: 配置对象
+
+    Returns:
+        包含 graph 和相关资源的字典
+    """
+    create_deep_agent, MemoryMiddleware, LocalShellBackend, _ = _ensure_deepagents()
+
+    workspace = config.agent.workspace
+    workspace.mkdir(parents=True, exist_ok=True)
+    (workspace / "memory").mkdir(exist_ok=True)
+    (workspace / "skills").mkdir(exist_ok=True)
+
+    logger.info(f"Initializing agent with workspace: {workspace}")
+
+    system_prompt = _build_system_prompt(config)
+    backend = LocalShellBackend(root_dir=str(workspace))
+
+    # 使用异步 SQLite Checkpointer
+    checkpoints_path = workspace / "checkpoints.db"
+    checkpointer = await _create_async_sqlite_checkpointer(str(checkpoints_path))
+    logger.info(f"Checkpointer: SQLite at {checkpoints_path}")
+
+    middlewares = _build_middlewares(config)
+    memory_sources = _build_memory_sources(config)
+    skills_sources = _build_skills_sources(config)
+
+    model = config.agent.model
+    if ":" in model:
+        provider, model_name = model.split(":", 1)
+    else:
+        provider = "anthropic"
+        model_name = model
+
+    provider_config = config.get_provider(provider)
+    api_key = provider_config.api_key if provider_config else None
+    api_base = provider_config.api_base if provider_config else None
+
+    if api_key:
+        import os
+        if provider == "openai":
+            os.environ["OPENAI_API_KEY"] = api_key
+            if api_base:
+                os.environ["OPENAI_BASE_URL"] = api_base
+        else:
+            os.environ["ANTHROPIC_API_KEY"] = api_key
+            if api_base:
+                os.environ["ANTHROPIC_BASE_URL"] = api_base
+
+    interrupt_on = None
+    if not config.agent.auto_approve:
+        interrupt_on = {
+            "execute": True,
+            "write_file": True,
+            "edit_file": True,
+            "web_search": True,
+            "task": True,
+        }
+
+    async_subagents = _build_async_subagents(config)
+
+    agent_kwargs: dict[str, Any] = {
+        "model": model,
+        "system_prompt": system_prompt,
+        "backend": backend,
+        "checkpointer": checkpointer,
+        "middleware": middlewares,
+        "interrupt_on": interrupt_on,
+        "memory": memory_sources,
+        "skills": skills_sources,
+    }
+
+    if async_subagents:
+        agent_kwargs["subagents"] = async_subagents
+
+    graph = create_deep_agent(**agent_kwargs)
     logger.info(f"Agent created: model={model}, auto_approve={config.agent.auto_approve}")
 
     return {
@@ -170,6 +297,9 @@ def _build_middlewares(config: Config) -> list[Any]:
     """
     构建中间件栈。
 
+    注意: deepagents 的 memory 和 skills 通过 create_deep_agent 的参数传递，
+    不是通过中间件。此函数保留用于未来可能的扩展。
+
     Args:
         config: 配置对象
 
@@ -177,31 +307,47 @@ def _build_middlewares(config: Config) -> list[Any]:
         中间件列表
     """
     middlewares = []
-    workspace = config.agent.workspace
-
-    # 记忆系统
-    if config.agent.enable_memory:
-        try:
-            from deepagents.middlewares import MemoryMiddleware
-
-            memory_file = workspace / "memory" / "AGENTS.md"
-            middlewares.append(MemoryMiddleware(str(memory_file)))
-            logger.info("Memory middleware enabled")
-        except ImportError:
-            logger.warning("MemoryMiddleware not available")
-
-    # 技能系统
-    if config.agent.enable_skills:
-        try:
-            from deepagents.middlewares import SkillsMiddleware
-
-            skills_dir = workspace / "skills"
-            middlewares.append(SkillsMiddleware(str(skills_dir)))
-            logger.info("Skills middleware enabled")
-        except ImportError:
-            logger.warning("SkillsMiddleware not available")
-
+    # 目前不需要额外中间件
+    # memory 和 skills 通过 create_deep_agent 的参数直接传递
     return middlewares
+
+
+def _build_memory_sources(config: Config) -> list[str] | None:
+    """
+    构建记忆源路径列表。
+
+    Args:
+        config: 配置对象
+
+    Returns:
+        记忆文件路径列表，如果未启用则返回 None
+    """
+    if not config.agent.enable_memory:
+        return None
+
+    workspace = config.agent.workspace
+    memory_file = workspace / "memory" / "AGENTS.md"
+    logger.info(f"Memory enabled: {memory_file}")
+    return [str(memory_file)]
+
+
+def _build_skills_sources(config: Config) -> list[str] | None:
+    """
+    构建技能源路径列表。
+
+    Args:
+        config: 配置对象
+
+    Returns:
+        技能目录路径列表，如果未启用则返回 None
+    """
+    if not config.agent.enable_skills:
+        return None
+
+    workspace = config.agent.workspace
+    skills_dir = workspace / "skills"
+    logger.info(f"Skills enabled: {skills_dir}")
+    return [str(skills_dir)]
 
 
 def _build_async_subagents(config: Config) -> list[dict[str, str]]:
@@ -235,29 +381,47 @@ class AgentSession:
 
     def __init__(self, config: Config):
         self.config = config
-        self._agent_resources: dict[str, Any] | None = None
+        self._graph = None
+        self._checkpointer = None
+        self._backend = None
+        self._workspace: Path | None = None
         self._thread_id: str = "default"
+
+    async def _ensure_initialized(self):
+        """确保 Agent 已初始化（异步）"""
+        if self._graph is None:
+            resources = await _create_agent_async(self.config)
+            self._graph = resources["graph"]
+            self._checkpointer = resources["checkpointer"]
+            self._backend = resources["backend"]
+            self._workspace = resources["workspace"]
 
     @property
     def graph(self):
         """获取 Agent graph"""
-        if self._agent_resources is None:
-            self._agent_resources = create_agent(self.config)
-        return self._agent_resources["graph"]
+        if self._graph is None:
+            # 同步访问时，抛出错误提示
+            raise RuntimeError(
+                "Agent not initialized. Call 'await session.initialize()' first, "
+                "or use an async context."
+            )
+        return self._graph
 
     @property
     def checkpointer(self):
         """获取 checkpointer"""
-        if self._agent_resources is None:
-            self._agent_resources = create_agent(self.config)
-        return self._agent_resources["checkpointer"]
+        if self._checkpointer is None:
+            raise RuntimeError("Agent not initialized.")
+        return self._checkpointer
 
     @property
     def workspace(self) -> Path:
         """获取工作空间路径"""
-        if self._agent_resources is None:
-            self._agent_resources = create_agent(self.config)
-        return self._agent_resources["workspace"]
+        if self._workspace is None:
+            # workspace 可以同步初始化
+            self._workspace = self.config.agent.workspace
+            self._workspace.mkdir(parents=True, exist_ok=True)
+        return self._workspace
 
     def set_thread_id(self, thread_id: str) -> None:
         """设置当前线程 ID"""
@@ -281,7 +445,8 @@ class AgentSession:
         Returns:
             Agent 响应
         """
-        graph = self.graph
+        await self._ensure_initialized()
+        graph = self._graph
         thread_config = self.get_thread_config()
 
         result = await graph.ainvoke(
@@ -292,8 +457,26 @@ class AgentSession:
         # 提取最后一条助手消息
         if "messages" in result:
             for msg in reversed(result["messages"]):
-                if msg.get("role") == "assistant":
-                    return msg.get("content", "")
+                # 处理 langchain 消息对象（AIMessage, HumanMessage 等）
+                msg_type = type(msg).__name__
+                if msg_type == "AIMessage":
+                    content = msg.content
+                    # 处理 content 为 None 的情况（API 错误）
+                    if content is None:
+                        logger.error("API returned None content, possibly an authentication error")
+                        return "Error: API returned empty response. Please check your API key and endpoint."
+                    # OpenAI Responses API 返回的是列表格式
+                    if isinstance(content, list):
+                        # 提取所有 text 类型的内容
+                        texts = []
+                        for item in content:
+                            if isinstance(item, dict) and item.get("type") == "text":
+                                texts.append(item.get("text", ""))
+                        return "\n".join(texts) if texts else ""
+                    return str(content) if content else ""
+                # 兼容字典格式的消息
+                elif isinstance(msg, dict) and msg.get("role") == "assistant":
+                    return msg.get("content", "") or ""
 
         return ""
 

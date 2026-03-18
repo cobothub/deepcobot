@@ -4,9 +4,12 @@
 """
 
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator
+
+# 支持的语言
+Language = Literal["en", "zh"]
 
 
 class ProviderConfig(BaseModel):
@@ -185,6 +188,10 @@ class LoggingConfig(BaseModel):
 class Config(BaseModel):
     """完整配置"""
 
+    language: Language = Field(
+        default="en",
+        description="CLI language (en or zh)",
+    )
     agent: AgentDefaults = Field(default_factory=AgentDefaults)
     providers: dict[str, ProviderConfig] = Field(default_factory=dict)
     gateway: GatewayConfig = Field(default_factory=GatewayConfig)

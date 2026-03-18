@@ -1,11 +1,16 @@
 # DeepCoBot
 
-[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 [中文文档](README_CN.md) | English
 
 A minimalist personal AI assistant framework built on [DeepAgents](https://github.com/langchain-ai/deepagents).
+
+## Requirements
+
+- Python >= 3.11
+- DeepAgents SDK (requires Python >= 3.11)
 
 ## Features
 
@@ -19,19 +24,40 @@ A minimalist personal AI assistant framework built on [DeepAgents](https://githu
 
 ### Installation
 
-```bash
-# Basic installation
-pip install deepcobot
+**From Source (Recommended)**
 
-# Install specific channel support
-pip install deepcobot[telegram]    # Telegram
-pip install deepcobot[discord]     # Discord
-pip install deepcobot[feishu]      # Feishu
-pip install deepcobot[dingtalk]    # DingTalk
-pip install deepcobot[web]         # Web API
+```bash
+# Clone the repository
+git clone https://github.com/cobothub/deepcobot.git
+cd deepcobot
+
+# Create virtual environment (requires Python 3.11+)
+python -m venv .venv
+source .venv/bin/activate  # Linux/macOS
+# .venv\Scripts\activate   # Windows
+
+# Install in development mode
+pip install -e .
+
+# Install with specific channel support
+pip install -e ".[telegram]"    # Telegram
+pip install -e ".[discord]"     # Discord
+pip install -e ".[feishu]"      # Feishu
+pip install -e ".[dingtalk]"    # DingTalk
+pip install -e ".[web]"         # Web API
 
 # Install all features
-pip install deepcobot[all]
+pip install -e ".[all]"
+
+# Install development dependencies
+pip install -e ".[dev]"
+```
+
+**From PyPI (Coming Soon)**
+
+```bash
+# Will be available after first release
+pip install deepcobot
 ```
 
 ### Configuration
@@ -165,7 +191,7 @@ docker-compose up -d
 
 ```bash
 # Clone repository
-git clone https://github.com/deepcobot/deepcobot.git
+git clone https://github.com/cobothub/deepcobot.git
 cd deepcobot
 
 # Install development dependencies

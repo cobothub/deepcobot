@@ -1,0 +1,154 @@
+# DeepCoBot 配置示例文件（中文版）
+# 复制此文件到 ~/.deepcobot/config.toml 并根据需要修改
+
+# ==================== Agent 默认配置 ====================
+[agent]
+# 工作空间目录，Agent 的所有文件操作都在此目录下进行
+workspace = "~/.deepcobot/workspace"
+
+# LLM 模型配置，格式: <提供商>:<模型名称>
+# 支持的提供商: anthropic, openai 或自定义提供商名称
+model = "anthropic:claude-sonnet-4-6"
+
+# 最大输出 token 数
+max_tokens = 8192
+
+# 系统提示词（可选，默认自动生成）
+# system_prompt = """你是一个有用的 AI 助手..."""
+
+# 是否启用记忆系统
+enable_memory = true
+
+# 是否启用技能系统
+enable_skills = true
+
+# 是否自动审批工具调用（设为 false 时需要手动审批敏感操作）
+# 需要审批的工具: execute, write_file, edit_file, web_search, task
+auto_approve = false
+
+# ==================== LLM 提供商配置 ====================
+
+# Anthropic 配置
+[providers.anthropic]
+api_key = "${ANTHROPIC_API_KEY}"
+# api_base = "https://api.anthropic.com"  # 可选，自定义 API 端点
+
+# OpenAI 配置
+[providers.openai]
+api_key = "${OPENAI_API_KEY}"
+# api_base = "https://api.openai.com/v1"  # 可选，自定义 API 端点
+
+# 自定义提供商示例（如 Together AI, Groq 等）
+# [providers.together]
+# api_key = "${TOGETHER_API_KEY}"
+# api_base = "https://api.together.xyz/v1"
+
+# ==================== Gateway 配置（可选） ====================
+# 用于集中管理 API 调用，支持 LangSmith 追踪等
+
+[gateway]
+enabled = false
+# url = "https://your-gateway.example.com"
+# api_key = "${GATEWAY_API_KEY}"
+
+# ==================== 消息渠道配置 ====================
+
+# CLI 渠道（默认启用）
+[channels.cli]
+enabled = true
+
+# Telegram 渠道
+[channels.telegram]
+enabled = false
+token = "${TELEGRAM_BOT_TOKEN}"
+# proxy = "http://127.0.0.1:7890"  # 可选，代理设置
+allowed_users = []  # 留空允许所有用户，或填写 user_id 或 username
+
+# Discord 渠道
+[channels.discord]
+enabled = false
+token = "${DISCORD_BOT_TOKEN}"
+allowed_users = []
+
+# 飞书渠道
+[channels.feishu]
+enabled = false
+app_id = "${FEISHU_APP_ID}"
+app_secret = "${FEISHU_APP_SECRET}"
+# encrypt_key = "${FEISHU_ENCRYPT_KEY}"  # 可选，消息加密密钥
+# verification_token = "${FEISHU_VERIFICATION_TOKEN}"  # 可选
+allowed_users = []
+
+# 钉钉渠道
+[channels.dingtalk]
+enabled = false
+client_id = "${DINGTALK_CLIENT_ID}"
+client_secret = "${DINGTALK_CLIENT_SECRET}"
+allowed_users = []
+
+# Web API 渠道
+[channels.web]
+enabled = false
+host = "0.0.0.0"
+port = 8080
+# api_key = "${WEB_API_KEY}"  # 可选，API 认证密钥
+
+# ==================== 异步子 Agent 配置 ====================
+# 配置连接远程 LangGraph 服务器的异步子 Agent
+
+# [[async_subagents]]
+# name = "research-agent"
+# description = "用于深度研究任务的异步 Agent"
+# graph_id = "research_graph"
+# url = "http://localhost:8123"
+
+# [[async_subagents]]
+# name = "code-review-agent"
+# description = "用于代码审查的异步 Agent"
+# graph_id = "code_review_graph"
+# url = "http://localhost:8124"
+
+# ==================== Cron 任务配置 ====================
+
+[cron]
+enabled = false
+store_path = "~/.deepcobot/cron_jobs.json"
+
+# 预定义任务示例
+# [[cron.jobs]]
+# name = "daily-report"
+# enabled = true
+# schedule = "0 9 * * *"  # 每天 9:00 (cron 表达式)
+# message = "请生成今天的日报"
+# channel = "telegram"
+# chat_id = "123456789"
+
+# [[cron.jobs]]
+# name = "hourly-check"
+# enabled = true
+# every = "1h"  # 每小时执行
+# message = "检查系统状态"
+
+# ==================== 服务配置 ====================
+
+[services]
+# 健康检查端点
+health_enabled = false
+health_port = 8081
+
+# 心跳检测间隔（秒）
+heartbeat_interval = 60
+
+# Prometheus 指标端点
+metrics_enabled = false
+metrics_port = 9090
+
+# ==================== 日志配置 ====================
+
+[logging]
+# 日志级别: DEBUG, INFO, WARNING, ERROR, CRITICAL
+level = "INFO"
+# 是否输出 JSON 格式日志（适合生产环境）
+json_format = false
+# 日志文件路径（可选）
+# file = "~/.deepcobot/deepcobot.log"

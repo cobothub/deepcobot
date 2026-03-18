@@ -1,0 +1,215 @@
+"""TOML 配置加载器
+
+支持 TOML 文件读取和环境变量替换。
+"""
+
+import os
+import re
+import sys
+from pathlib import Path
+from typing import Any
+
+from loguru import logger
+
+# Python 3.11+ 内置 tomllib，否则使用 tomli
+if sys.version_info >= (3, 11):
+    import tomllib
+else:
+    import tomli as tomllib
+
+from deepcobot.config.schema import Config
+
+
+def _expand_env_vars(value: Any) -> Any:
+    """
+    递归替换配置值中的环境变量。
+
+    支持格式: ${ENV_VAR} 或 ${ENV_VAR:-default}
+
+    Args:
+        value: 配置值（可以是字符串、字典、列表等）
+
+    Returns:
+        替换后的配置值
+
+    Raises:
+        ValueError: 环境变量未定义且无默认值
+    """
+    if isinstance(value, str):
+        # 匹配 ${VAR} 或 ${VAR:-default}
+        pattern = r"\$\{([^}]+)\}"
+
+        def replace_env(match: re.Match[str]) -> str:
+            expr = match.group(1)
+
+            # 检查是否有默认值 ${VAR:-default}
+            if ":-" in expr:
+                var_name, default = expr.split(":-", 1)
+                return os.environ.get(var_name, default)
+
+            var_name = expr
+            env_value = os.environ.get(var_name)
+
+            if env_value is None:
+                raise ValueError(
+                    f"Environment variable '{var_name}' is not defined. "
+                    f"Please set it in your environment or provide a default value."
+                )
+
+            return env_value
+
+        return re.sub(pattern, replace_env, value)
+
+    elif isinstance(value, dict):
+        return {k: _expand_env_vars(v) for k, v in value.items()}
+
+    elif isinstance(value, list):
+        return [_expand_env_vars(item) for item in value]
+
+    return value
+
+
+def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
+    """
+    深度合并两个字典，override 覆盖 base 的值。
+
+    Args:
+        base: 基础字典
+        override: 覆盖字典
+
+    Returns:
+        合并后的字典
+    """
+    result = base.copy()
+
+    for key, value in override.items():
+        if (
+            key in result
+            and isinstance(result[key], dict)
+            and isinstance(value, dict)
+        ):
+            result[key] = _deep_merge(result[key], value)
+        else:
+            result[key] = value
+
+    return result
+
+
+def load_config(config_path: Path | str | None = None) -> Config:
+    """
+    加载配置文件。
+
+    加载顺序：
+    1. 如果指定了 config_path，只加载该文件
+    2. 否则加载 ~/.deepcobot/config.toml
+    3. 如果文件不存在，使用默认配置
+
+    Args:
+        config_path: 配置文件路径（可选）
+
+    Returns:
+        配置对象
+
+    Raises:
+        FileNotFoundError: 指定的配置文件不存在
+        ValueError: 配置解析失败
+    """
+    if config_path is not None:
+        config_path = Path(config_path).expanduser()
+        if not config_path.exists():
+            raise FileNotFoundError(f"Config file not found: {config_path}")
+        return _load_config_from_file(config_path)
+
+    # 默认配置文件路径
+    default_path = Path.home() / ".deepcobot" / "config.toml"
+
+    if default_path.exists():
+        return _load_config_from_file(default_path)
+
+    logger.info("Using default configuration (no config file found)")
+    return Config()
+
+
+def _load_config_from_file(config_path: Path) -> Config:
+    """
+    从文件加载配置。
+
+    Args:
+        config_path: 配置文件路径
+
+    Returns:
+        配置对象
+
+    Raises:
+        ValueError: TOML 解析失败或配置验证失败
+    """
+    logger.info(f"Loading config from: {config_path}")
+
+    try:
+        with open(config_path, "rb") as f:
+            raw_config = tomllib.load(f)
+    except Exception as e:
+        raise ValueError(f"Failed to parse TOML config: {e}") from e
+
+    # 替换环境变量
+    try:
+        expanded_config = _expand_env_vars(raw_config)
+    except ValueError as e:
+        raise ValueError(f"Failed to expand environment variables: {e}") from e
+
+    # 验证并构建配置对象
+    try:
+        config = Config(**expanded_config)
+    except Exception as e:
+        raise ValueError(f"Failed to validate config: {e}") from e
+
+    logger.info(
+        f"Config loaded: model={config.agent.model}, "
+        f"workspace={config.agent.workspace}"
+    )
+
+    return config
+
+
+def get_default_config_path() -> Path:
+    """获取默认配置文件路径"""
+    return Path.home() / ".deepcobot" / "config.toml"
+
+
+def ensure_config_dir() -> Path:
+    """确保配置目录存在"""
+    config_dir = Path.home() / ".deepcobot"
+    config_dir.mkdir(parents=True, exist_ok=True)
+    return config_dir
+
+
+def create_default_config() -> Path:
+    """
+    创建默认配置文件。
+
+    Returns:
+        创建的配置文件路径
+    """
+    config_dir = ensure_config_dir()
+    config_path = config_dir / "config.toml"
+
+    if config_path.exists():
+        logger.warning(f"Config file already exists: {config_path}")
+        return config_path
+
+    # 创建最小配置文件
+    minimal_config = """# DeepCoBot 配置文件
+# 由 DeepCoBot 自动生成
+
+[agent]
+# workspace = "~/.deepcobot/workspace"
+# model = "anthropic:claude-sonnet-4-6"
+
+[providers.anthropic]
+api_key = "${ANTHROPIC_API_KEY}"
+"""
+
+    config_path.write_text(minimal_config)
+    logger.info(f"Created default config file: {config_path}")
+
+    return config_path

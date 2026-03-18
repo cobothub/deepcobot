@@ -27,6 +27,7 @@ enable_skills = true
 auto_approve = false
 
 # ==================== LLM Provider Configuration ====================
+# DeepCoBot supports any OpenAI-compatible API. Configure your provider below.
 
 # Anthropic configuration
 [providers.anthropic]
@@ -38,7 +39,32 @@ api_key = "${ANTHROPIC_API_KEY}"
 api_key = "${OPENAI_API_KEY}"
 # api_base = "https://api.openai.com/v1"  # Optional, custom API endpoint
 
-# Custom provider example (e.g., Together AI, Groq)
+# DeepSeek configuration (OpenAI-compatible)
+# [providers.deepseek]
+# api_key = "${DEEPSEEK_API_KEY}"
+# api_base = "https://api.deepseek.com/v1"
+
+# Moonshot (月之暗面) configuration (OpenAI-compatible)
+# [providers.moonshot]
+# api_key = "${MOONSHOT_API_KEY}"
+# api_base = "https://api.moonshot.cn/v1"
+
+# Zhipu (智谱) configuration (OpenAI-compatible)
+# [providers.zhipu]
+# api_key = "${ZHIPU_API_KEY}"
+# api_base = "https://open.bigmodel.cn/api/paas/v4"
+
+# Qwen (通义千问) configuration (OpenAI-compatible)
+# [providers.qwen]
+# api_key = "${QWEN_API_KEY}"
+# api_base = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+
+# Local LLM via Ollama (OpenAI-compatible)
+# [providers.ollama]
+# api_key = "ollama"  # Ollama doesn't require a real API key
+# api_base = "http://localhost:11434/v1"
+
+# Other OpenAI-compatible providers (e.g., Together AI, Groq, SiliconFlow)
 # [providers.together]
 # api_key = "${TOGETHER_API_KEY}"
 # api_base = "https://api.together.xyz/v1"

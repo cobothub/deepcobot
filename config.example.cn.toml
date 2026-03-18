@@ -27,6 +27,7 @@ enable_skills = true
 auto_approve = false
 
 # ==================== LLM 提供商配置 ====================
+# DeepCoBot 支持任何 OpenAI 兼容的 API，请在下方配置你的提供商
 
 # Anthropic 配置
 [providers.anthropic]
@@ -38,7 +39,32 @@ api_key = "${ANTHROPIC_API_KEY}"
 api_key = "${OPENAI_API_KEY}"
 # api_base = "https://api.openai.com/v1"  # 可选，自定义 API 端点
 
-# 自定义提供商示例（如 Together AI, Groq 等）
+# DeepSeek 配置（OpenAI 兼容格式）
+# [providers.deepseek]
+# api_key = "${DEEPSEEK_API_KEY}"
+# api_base = "https://api.deepseek.com/v1"
+
+# 月之暗面 (Moonshot) 配置（OpenAI 兼容格式）
+# [providers.moonshot]
+# api_key = "${MOONSHOT_API_KEY}"
+# api_base = "https://api.moonshot.cn/v1"
+
+# 智谱 (Zhipu) 配置（OpenAI 兼容格式）
+# [providers.zhipu]
+# api_key = "${ZHIPU_API_KEY}"
+# api_base = "https://open.bigmodel.cn/api/paas/v4"
+
+# 通义千问 (Qwen) 配置（OpenAI 兼容格式）
+# [providers.qwen]
+# api_key = "${QWEN_API_KEY}"
+# api_base = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+
+# 本地大模型通过 Ollama（OpenAI 兼容格式）
+# [providers.ollama]
+# api_key = "ollama"  # Ollama 不需要真实的 API 密钥
+# api_base = "http://localhost:11434/v1"
+
+# 其他 OpenAI 兼容提供商（如 Together AI, Groq, SiliconFlow 硅基流动等）
 # [providers.together]
 # api_key = "${TOGETHER_API_KEY}"
 # api_base = "https://api.together.xyz/v1"

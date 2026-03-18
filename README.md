@@ -71,6 +71,8 @@ mkdir -p ~/.deepcobot
 
 2. Create configuration file `~/.deepcobot/config.toml`:
 
+**Using Anthropic Claude:**
+
 ```toml
 [agent]
 workspace = "~/.deepcobot/workspace"
@@ -83,10 +85,45 @@ api_key = "${ANTHROPIC_API_KEY}"
 enabled = true
 ```
 
+**Using OpenAI:**
+
+```toml
+[agent]
+workspace = "~/.deepcobot/workspace"
+model = "openai:gpt-4o"
+
+[providers.openai]
+api_key = "${OPENAI_API_KEY}"
+
+[channels.cli]
+enabled = true
+```
+
+**Using OpenAI-Compatible APIs** (e.g., DeepSeek, Qwen, Moonshot, Zhipu, local LLMs):
+
+```toml
+[agent]
+workspace = "~/.deepcobot/workspace"
+model = "deepseek:deepseek-chat"
+
+[providers.deepseek]
+api_key = "${DEEPSEEK_API_KEY}"
+api_base = "https://api.deepseek.com/v1"
+
+[channels.cli]
+enabled = true
+```
+
+See [config.example.toml](config.example.toml) for complete configuration options.
+
 3. Set environment variables:
 
 ```bash
-export ANTHROPIC_API_KEY="your-api-key"
+export ANTHROPIC_API_KEY="your-api-key"  # For Anthropic Claude
+# or
+export OPENAI_API_KEY="your-api-key"      # For OpenAI
+# or
+export DEEPSEEK_API_KEY="your-api-key"    # For DeepSeek
 ```
 
 ### Running
@@ -243,11 +280,33 @@ curl -X POST http://localhost:8080/chat \
 | Option | Description | Default |
 |--------|-------------|---------|
 | `agent.workspace` | Workspace directory | `~/.deepcobot/workspace` |
-| `agent.model` | LLM model | `anthropic:claude-sonnet-4-6` |
+| `agent.model` | LLM model (format: `provider:model`) | `anthropic:claude-sonnet-4-6` |
 | `agent.max_tokens` | Maximum output tokens | `8192` |
 | `agent.enable_memory` | Enable memory system | `true` |
 | `agent.enable_skills` | Enable skills system | `true` |
 | `agent.auto_approve` | Auto-approve tools | `false` |
+
+### LLM Provider Configuration
+
+DeepCoBot supports multiple LLM providers with OpenAI-compatible API format:
+
+| Provider | Model Format | API Base |
+|----------|-------------|----------|
+| Anthropic | `anthropic:claude-sonnet-4-6` | Default: `https://api.anthropic.com` |
+| OpenAI | `openai:gpt-4o` | Default: `https://api.openai.com/v1` |
+| DeepSeek | `deepseek:deepseek-chat` | `https://api.deepseek.com/v1` |
+| Moonshot | `moonshot:moonshot-v1-8k` | `https://api.moonshot.cn/v1` |
+| Zhipu (智谱) | `zhipu:glm-4` | `https://open.bigmodel.cn/api/paas/v4` |
+| Qwen (通义千问) | `qwen:qwen-turbo` | `https://dashscope.aliyuncs.com/compatible-mode/v1` |
+| Local LLM (Ollama) | `ollama:llama3` | `http://localhost:11434/v1` |
+
+To use a custom provider, define it in the `[providers]` section with `api_key` and `api_base`:
+
+```toml
+[providers.custom_provider]
+api_key = "${CUSTOM_API_KEY}"
+api_base = "https://your-api-endpoint.com/v1"
+```
 
 ### LangSmith Configuration
 

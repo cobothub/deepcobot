@@ -71,6 +71,8 @@ mkdir -p ~/.deepcobot
 
 2. 创建配置文件 `~/.deepcobot/config.toml`：
 
+**使用 Anthropic Claude:**
+
 ```toml
 [agent]
 workspace = "~/.deepcobot/workspace"
@@ -83,10 +85,45 @@ api_key = "${ANTHROPIC_API_KEY}"
 enabled = true
 ```
 
+**使用 OpenAI:**
+
+```toml
+[agent]
+workspace = "~/.deepcobot/workspace"
+model = "openai:gpt-4o"
+
+[providers.openai]
+api_key = "${OPENAI_API_KEY}"
+
+[channels.cli]
+enabled = true
+```
+
+**使用 OpenAI 兼容 API**（如 DeepSeek、通义千问、月之暗面、智谱、本地大模型等）:
+
+```toml
+[agent]
+workspace = "~/.deepcobot/workspace"
+model = "deepseek:deepseek-chat"
+
+[providers.deepseek]
+api_key = "${DEEPSEEK_API_KEY}"
+api_base = "https://api.deepseek.com/v1"
+
+[channels.cli]
+enabled = true
+```
+
+完整配置选项请参考 [config.example.cn.toml](config.example.cn.toml)。
+
 3. 设置环境变量：
 
 ```bash
-export ANTHROPIC_API_KEY="your-api-key"
+export ANTHROPIC_API_KEY="your-api-key"  # Anthropic Claude
+# 或
+export OPENAI_API_KEY="your-api-key"      # OpenAI
+# 或
+export DEEPSEEK_API_KEY="your-api-key"    # DeepSeek
 ```
 
 ### 运行
@@ -243,11 +280,33 @@ curl -X POST http://localhost:8080/chat \
 | 配置项 | 说明 | 默认值 |
 |--------|------|--------|
 | `agent.workspace` | 工作空间目录 | `~/.deepcobot/workspace` |
-| `agent.model` | LLM 模型 | `anthropic:claude-sonnet-4-6` |
+| `agent.model` | LLM 模型（格式：`提供商:模型名`） | `anthropic:claude-sonnet-4-6` |
 | `agent.max_tokens` | 最大输出 token | `8192` |
 | `agent.enable_memory` | 启用记忆系统 | `true` |
 | `agent.enable_skills` | 启用技能系统 | `true` |
 | `agent.auto_approve` | 自动审批工具 | `false` |
+
+### LLM 提供商配置
+
+DeepCoBot 支持多种 OpenAI 兼容格式的 LLM 提供商：
+
+| 提供商 | 模型格式 | API Base |
+|--------|----------|----------|
+| Anthropic | `anthropic:claude-sonnet-4-6` | 默认：`https://api.anthropic.com` |
+| OpenAI | `openai:gpt-4o` | 默认：`https://api.openai.com/v1` |
+| DeepSeek | `deepseek:deepseek-chat` | `https://api.deepseek.com/v1` |
+| 月之暗面 | `moonshot:moonshot-v1-8k` | `https://api.moonshot.cn/v1` |
+| 智谱 | `zhipu:glm-4` | `https://open.bigmodel.cn/api/paas/v4` |
+| 通义千问 | `qwen:qwen-turbo` | `https://dashscope.aliyuncs.com/compatible-mode/v1` |
+| 本地大模型 (Ollama) | `ollama:llama3` | `http://localhost:11434/v1` |
+
+使用自定义提供商时，在 `[providers]` 部分定义 `api_key` 和 `api_base`：
+
+```toml
+[providers.custom_provider]
+api_key = "${CUSTOM_API_KEY}"
+api_base = "https://your-api-endpoint.com/v1"
+```
 
 ### LangSmith 配置
 

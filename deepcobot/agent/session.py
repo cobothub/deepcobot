@@ -313,7 +313,7 @@ class AgentSession:
         final_state = None
         event_count = 0
         start_time = time.time()
-
+        event_type_list = []
         async for event in graph.astream_events(
             {"messages": [{"role": "user", "content": message}]} if message else None,
             config=thread_config,
@@ -323,6 +323,8 @@ class AgentSession:
             event_type = event.get("event")
             event_name = event.get("name", "")
             event_data = event.get("data", {})
+            if event_type not in event_type_list:
+                event_type_list.append(event_type)
 
             # 详细记录工具调用事件
             if event_type == "on_tool_start":
@@ -353,15 +355,15 @@ class AgentSession:
                 error = event_data.get("error", "Unknown error")
                 logger.debug(f"[Tool] <<< {event_name} ERROR: {error}")
 
-            # 记录 LLM 事件
-            elif event_type == "on_llm_start":
+            # 记录 LLM 事件 (同时支持 on_llm_* 和 on_chat_model_* 两种事件类型)
+            elif event_type in ("on_chat_model_start", "on_llm_start"):
                 logger.debug(f"[LLM] >>> {event_name} START")
                 input_data = event_data.get("input", {})
                 if input_data and "messages" in input_data:
                     msg_count = len(input_data.get("messages", []))
                     logger.debug(f"[LLM] >>> {event_name} messages: {msg_count}")
 
-            elif event_type == "on_llm_end":
+            elif event_type in ("on_chat_model_end", "on_llm_end"):
                 logger.debug(f"[LLM] <<< {event_name} END ({time.time() - start_time:.2f}s)")
                 output = event_data.get("output", {})
                 if output:
@@ -370,15 +372,11 @@ class AgentSession:
                     if usage:
                         logger.debug(f"[LLM] <<< tokens: input={usage.get('input_tokens')}, output={usage.get('output_tokens')}")
 
-            elif event_type == "on_llm_stream":
+            elif event_type in ("on_chat_model_stream", "on_llm_stream"):
                 # LLM 流式输出，只在第一个 chunk 时记录
                 chunk = event_data.get("chunk", {})
                 if chunk and event_count % 20 == 0:  # 每 20 个 chunk 记录一次
                     logger.debug(f"[LLM] ... streaming ({event_count} chunks)")
-
-            elif event_type == "on_llm_error":
-                error = event_data.get("error", "Unknown error")
-                logger.debug(f"[LLM] <<< {event_name} ERROR: {error}")
 
             # 记录链结束
             elif event_type == "on_chain_end" and event_name == "LangGraph":
@@ -388,7 +386,7 @@ class AgentSession:
             if self._event_callback:
                 await self._event_callback(event)
 
-        logger.debug(f"[Session] astream_events completed in {time.time() - start_time:.2f}s, received {event_count} events")
+        logger.debug(f"[Session] astream_events completed in {time.time() - start_time:.2f}s, received {event_count} events. event_types: {event_type_list}")
 
         # 流结束后检查是否有中断
         has_interrupt, resume_final_state = await self._check_and_handle_interrupt()
@@ -447,5 +445,20 @@ class AgentSession:
             yield event
 
     def reset(self) -> None:
-        """重置会话"""
+        """重置会话（仅重置 thread_id，不清除历史）"""
         self._thread_id = "default"
+
+    async def clear_history(self, thread_id: str | None = None) -> None:
+        """
+        清除指定会话的历史记录
+
+        Args:
+            thread_id: 要清除的会话 ID，如果为 None 则清除当前会话
+        """
+        await self._ensure_initialized()
+
+        target_thread = thread_id or self._thread_id
+
+        # 删除 checkpointer 中保存的状态
+        await self._checkpointer.adelete_thread(target_thread)
+        logger.info(f"[Session] Cleared history for thread: {target_thread}")

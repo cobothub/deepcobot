@@ -116,6 +116,18 @@ async def _run_bot(cfg, lang: Language) -> None:
                 return None
             # 如果不是有效的审批响应，继续正常处理
 
+        # 处理特殊命令
+        content = msg.content.strip()
+        if content.lower() in ("/reset", "/new", "/clear", "重置", "新建会话"):
+            session.set_thread_id(msg.chat_id)
+            await session.clear_history()
+            logger.info(f"[Agent] Session reset for {session_key}")
+            return OutboundMessage(
+                channel=msg.channel,
+                chat_id=msg.chat_id,
+                content="✅ 会话已重置，开始新的对话。",
+            )
+
         # 记录请求计数
         metrics.inc_requests(msg.channel)
 

@@ -156,8 +156,8 @@ async def _run_session(cfg, thread_id: str, lang: Language) -> None:
                 status_live.stop()
                 status_live = None
 
-        # LLM 调用开始
-        elif event_type == "on_llm_start":
+        # LLM 调用开始 (同时支持 on_llm_start 和 on_chat_model_start)
+        elif event_type in ("on_chat_model_start", "on_llm_start"):
             if status_live:
                 status_live.stop()
 
@@ -166,15 +166,15 @@ async def _run_session(cfg, thread_id: str, lang: Language) -> None:
             status_live = Live(current_status, console=console, refresh_per_second=4)
             status_live.start()
 
-        # LLM 流式输出
-        elif event_type == "on_llm_stream":
+        # LLM 流式输出 (同时支持 on_llm_stream 和 on_chat_model_stream)
+        elif event_type in ("on_chat_model_stream", "on_llm_stream"):
             # LLM 开始输出，停止状态显示
             if status_live:
                 status_live.stop()
                 status_live = None
 
-        # LLM 调用结束
-        elif event_type == "on_llm_end":
+        # LLM 调用结束 (同时支持 on_llm_end 和 on_chat_model_end)
+        elif event_type in ("on_chat_model_end", "on_llm_end"):
             if status_live:
                 status_live.stop()
                 status_live = None

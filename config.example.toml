@@ -220,3 +220,30 @@ enabled = false
 # api_key = "${LANGSMITH_API_KEY}"
 # Project name (optional, defaults to "default")
 # project = "my-project"
+
+# ==================== MCP (Model Context Protocol) Configuration ====================
+# Connect to MCP servers to extend Agent capabilities with external tools
+
+# Example: Local filesystem MCP server (stdio transport)
+# [mcp.servers.filesystem]
+# type = "stdio"
+# command = "npx"
+# args = ["-y", "@anthropic/mcp-server-filesystem", "/tmp"]
+# tool_timeout = 30
+# enabled_tools = ["*"]  # "*" enables all tools, or specify tool names
+
+# Example: Remote MCP server (SSE transport)
+# [mcp.servers.remote-api]
+# type = "sse"
+# url = "https://api.example.com/mcp/sse"
+# headers = { Authorization = "Bearer your-token" }
+# tool_timeout = 60
+# enabled_tools = ["search", "query"]  # Only enable specific tools
+
+# Example: Remote MCP server (Streamable HTTP transport)
+# [mcp.servers.data-service]
+# type = "streamableHttp"
+# url = "https://api.example.com/mcp"
+# headers = { "X-API-Key" = "your-api-key" }
+# tool_timeout = 30
+# enabled_tools = ["*"]

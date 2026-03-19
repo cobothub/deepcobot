@@ -4,6 +4,7 @@
 """
 
 import asyncio
+from contextlib import AsyncExitStack
 from pathlib import Path
 from typing import Any
 
@@ -21,6 +22,7 @@ from deepcobot.agent.builder import (
     setup_api_key,
     get_interrupt_config,
     build_compact_tool_middleware,
+    build_mcp_tools,
 )
 
 # 延迟导入，避免在未安装时立即报错
@@ -185,6 +187,9 @@ async def create_agent_async(config: Config) -> dict[str, Any]:
 
     logger.info(f"Initializing agent with workspace: {workspace}")
 
+    # 创建 AsyncExitStack 用于管理 MCP 连接生命周期
+    exit_stack = AsyncExitStack()
+
     system_prompt = build_system_prompt(config)
     backend = LocalShellBackend(root_dir=str(workspace), virtual_mode=False)
 
@@ -212,6 +217,9 @@ async def create_agent_async(config: Config) -> dict[str, Any]:
     else:
         effective_backend = backend
 
+    # 加载 MCP 工具
+    mcp_tools = await build_mcp_tools(config, exit_stack)
+
     agent_kwargs: dict[str, Any] = {
         "model": model,
         "system_prompt": system_prompt,
@@ -226,6 +234,9 @@ async def create_agent_async(config: Config) -> dict[str, Any]:
     if async_subagents:
         agent_kwargs["subagents"] = async_subagents
 
+    if mcp_tools:
+        agent_kwargs["tools"] = mcp_tools
+
     graph = create_deep_agent(**agent_kwargs)
     logger.info(f"Agent created: model={model}, auto_approve={config.agent.auto_approve}")
 
@@ -234,4 +245,5 @@ async def create_agent_async(config: Config) -> dict[str, Any]:
         "checkpointer": checkpointer,
         "backend": backend,
         "workspace": workspace,
+        "exit_stack": exit_stack,
     }

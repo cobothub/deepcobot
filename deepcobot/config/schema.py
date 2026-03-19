@@ -177,20 +177,31 @@ class HeartbeatConfig(BaseModel):
     timeout: int = Field(default=120, description="执行超时时间（秒）")
 
 
-class HeartbeatConfig(BaseModel):
-    """Heartbeat 服务配置"""
+class MCPServerConfig(BaseModel):
+    """MCP 服务器连接配置"""
 
-    enabled: bool = Field(default=False, description="是否启用 Heartbeat")
-    every: str = Field(default="30m", description="执行间隔，如 '30m', '1h', '2h30m'")
-    active_hours: str | None = Field(
-        default=None,
-        description="活跃时段，如 '09:00-18:00'，仅在此时段内执行",
+    type: Literal["stdio", "sse", "streamableHttp"] | None = Field(
+        default=None, description="传输类型，自动检测如果省略"
     )
-    target: str | None = Field(
-        default=None,
-        description="结果投递目标：'last' 投递到上次交互渠道，或 'channel:chat_id' 指定渠道",
+    command: str = Field(default="", description="Stdio: 命令 (如 'npx')")
+    args: list[str] = Field(default_factory=list, description="Stdio: 命令参数")
+    env: dict[str, str] = Field(default_factory=dict, description="Stdio: 环境变量")
+    url: str = Field(default="", description="HTTP/SSE: 端点 URL")
+    headers: dict[str, str] = Field(default_factory=dict, description="HTTP/SSE: 自定义请求头")
+    tool_timeout: int = Field(default=30, description="工具调用超时时间（秒）")
+    enabled_tools: list[str] = Field(
+        default_factory=lambda: ["*"],
+        description="启用的工具列表，['*'] 表示所有工具",
     )
-    timeout: int = Field(default=120, description="执行超时时间（秒）")
+
+
+class MCPConfig(BaseModel):
+    """MCP 配置容器"""
+
+    servers: dict[str, MCPServerConfig] = Field(
+        default_factory=dict,
+        description="MCP 服务器配置字典，键为服务器名称",
+    )
 
 
 class CronConfig(BaseModel):
@@ -271,6 +282,7 @@ class Config(BaseModel):
     services: ServicesConfig = Field(default_factory=ServicesConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
     langsmith: LangSmithConfig = Field(default_factory=LangSmithConfig)
+    mcp: MCPConfig = Field(default_factory=MCPConfig)
 
     model_config = {
         "extra": "ignore",  # 忽略未知字段

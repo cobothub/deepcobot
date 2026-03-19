@@ -1,7 +1,9 @@
 """Agent 配置构建函数"""
 
+from contextlib import AsyncExitStack
 from typing import Any
 
+from langchain_core.tools import BaseTool
 from loguru import logger
 
 from deepcobot.config import Config
@@ -260,3 +262,32 @@ def build_compact_tool_middleware(
     logger.info(f"Compact conversation tool enabled, cache at {workspace / '.cache'}")
 
     return middleware, composite_backend
+
+
+async def build_mcp_tools(config: Config, exit_stack: AsyncExitStack) -> list[BaseTool]:
+    """构建 MCP 工具列表
+
+    连接 MCP 服务器并加载其工具，优雅降级处理连接失败。
+
+    Args:
+        config: 配置对象
+        exit_stack: AsyncExitStack 用于管理 MCP 连接生命周期
+
+    Returns:
+        LangChain BaseTool 列表
+    """
+    try:
+        from deepcobot.agent.mcp.tools import load_mcp_tools
+
+        tools = await load_mcp_tools(config, exit_stack)
+        if tools:
+            logger.info(f"Loaded {len(tools)} MCP tool(s)")
+        return tools
+    except ImportError:
+        logger.warning(
+            "MCP support not available. Install with: pip install langchain-mcp-adapters"
+        )
+        return []
+    except Exception as e:
+        logger.error(f"Failed to load MCP tools: {e}")
+        return []

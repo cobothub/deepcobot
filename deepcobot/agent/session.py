@@ -1,5 +1,6 @@
 """Agent 会话管理"""
 
+from contextlib import AsyncExitStack
 from pathlib import Path
 from typing import Any, Callable, Awaitable
 
@@ -26,6 +27,7 @@ class AgentSession:
         self._backend = None
         self._workspace: Path | None = None
         self._thread_id: str = "default"
+        self._exit_stack: AsyncExitStack | None = None
         # 审批回调函数
         self._approval_callback: Callable[[list[dict]], Awaitable[list[dict]]] | None = None
         # 事件回调函数
@@ -46,6 +48,7 @@ class AgentSession:
             self._checkpointer = resources["checkpointer"]
             self._backend = resources["backend"]
             self._workspace = resources["workspace"]
+            self._exit_stack = resources.get("exit_stack")
 
     @property
     def graph(self):
@@ -462,3 +465,10 @@ class AgentSession:
         # 删除 checkpointer 中保存的状态
         await self._checkpointer.adelete_thread(target_thread)
         logger.info(f"[Session] Cleared history for thread: {target_thread}")
+
+    async def close(self) -> None:
+        """关闭会话并清理资源"""
+        if self._exit_stack is not None:
+            await self._exit_stack.aclose()
+            self._exit_stack = None
+            logger.info("[Session] Closed MCP connections")

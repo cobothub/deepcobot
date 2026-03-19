@@ -220,3 +220,30 @@ enabled = false
 # api_key = "${LANGSMITH_API_KEY}"
 # 项目名称（可选，默认为 "default"）
 # project = "my-project"
+
+# ==================== MCP (Model Context Protocol) 配置 ====================
+# 连接 MCP 服务器以扩展 Agent 能力
+
+# 示例：本地文件系统 MCP 服务器（stdio 传输）
+# [mcp.servers.filesystem]
+# type = "stdio"
+# command = "npx"
+# args = ["-y", "@anthropic/mcp-server-filesystem", "/tmp"]
+# tool_timeout = 30
+# enabled_tools = ["*"]  # "*" 启用所有工具，或指定工具名列表
+
+# 示例：远程 MCP 服务器（SSE 传输）
+# [mcp.servers.remote-api]
+# type = "sse"
+# url = "https://api.example.com/mcp/sse"
+# headers = { Authorization = "Bearer your-token" }
+# tool_timeout = 60
+# enabled_tools = ["search", "query"]  # 只启用特定工具
+
+# 示例：远程 MCP 服务器（Streamable HTTP 传输）
+# [mcp.servers.data-service]
+# type = "streamableHttp"
+# url = "https://api.example.com/mcp"
+# headers = { "X-API-Key" = "your-api-key" }
+# tool_timeout = 30
+# enabled_tools = ["*"]

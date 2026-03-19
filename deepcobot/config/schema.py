@@ -54,6 +54,15 @@ class DingTalkChannelConfig(BaseModel):
     client_id: str = ""
     client_secret: str = ""
     allowed_users: list[str] = Field(default_factory=list)
+    # AI Card 配置（可选，用于进度显示）
+    card_template_id: str = Field(
+        default="",
+        description="AI卡片模板ID，用于进度反馈（类似spinner）",
+    )
+    card_template_key: str = Field(
+        default="content",
+        description="AI卡片模板中内容字段的key",
+    )
 
 
 class WebChannelConfig(BaseModel):

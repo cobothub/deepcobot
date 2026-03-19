@@ -112,6 +112,11 @@ client_id = "${DINGTALK_CLIENT_ID}"
 client_secret = "${DINGTALK_CLIENT_SECRET}"
 allowed_users = []
 
+# AI 卡片配置（可选，用于进度反馈）
+# 在钉钉开放平台创建卡片模板后启用，可实时显示 Agent 执行进度（类似 spinner）
+# card_template_id = "your_card_template_id"
+# card_template_key = "content"  # 卡片模板中内容字段的 key
+
 # Web API 渠道
 [channels.web]
 enabled = false

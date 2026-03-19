@@ -112,6 +112,11 @@ client_id = "${DINGTALK_CLIENT_ID}"
 client_secret = "${DINGTALK_CLIENT_SECRET}"
 allowed_users = []
 
+# AI Card configuration for progress feedback (optional)
+# Create a card template in DingTalk Open Platform to enable real-time progress display
+# card_template_id = "your_card_template_id"
+# card_template_key = "content"  # Content field key in the card template
+
 # Web API channel
 [channels.web]
 enabled = false

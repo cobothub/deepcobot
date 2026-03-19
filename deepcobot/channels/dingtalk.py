@@ -1,12 +1,18 @@
 """钉钉渠道实现
 
 使用 dingtalk-stream 库实现钉钉机器人渠道。
+支持 AI Card 进度反馈。
 """
 
 import asyncio
+import json
 import threading
-from typing import TYPE_CHECKING
+import time
+import uuid
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any
 
+import httpx
 from loguru import logger
 
 from deepcobot.channels.base import BaseChannel
@@ -14,6 +20,16 @@ from deepcobot.channels.events import InboundMessage, OutboundMessage
 
 if TYPE_CHECKING:
     from deepcobot.bus.queue import MessageBus
+
+# AI Card 状态常量
+CARD_PROCESSING = "1"
+CARD_INPUTING = "2"
+CARD_FINISHED = "3"
+CARD_FAILED = "5"
+
+# AI Card 配置
+AI_CARD_MIN_INTERVAL_SECONDS = 0.6  # 最小更新间隔
+AI_CARD_PROCESSING_TEXT = "处理中..."
 
 # 延迟导入标记
 _DINGTALK_AVAILABLE = False
@@ -55,6 +71,19 @@ def _ensure_dingtalk():
         return False
 
 
+@dataclass
+class ActiveCard:
+    """活跃的 AI Card"""
+
+    card_instance_id: str
+    access_token: str
+    conversation_id: str
+    created_at: int
+    last_updated: int
+    state: str
+    last_content: str = ""
+
+
 class DingTalkChannel(BaseChannel):
     """
     钉钉渠道实现，使用 Stream 模式连接。
@@ -62,7 +91,7 @@ class DingTalkChannel(BaseChannel):
     特点：
     - 无需公网 IP
     - 支持 Stream 模式
-    - 支持卡片消息
+    - 支持 AI Card 进度反馈（类似 spinner）
     - 使用独立线程运行 stream，支持优雅关闭
 
     Attributes:
@@ -82,11 +111,27 @@ class DingTalkChannel(BaseChannel):
         super().__init__(config, bus)
         self.client_id = getattr(config, "client_id", "")
         self.client_secret = getattr(config, "client_secret", "")
+        # AI Card 配置（可选）
+        self.card_template_id = getattr(config, "card_template_id", "")
+        self.card_template_key = getattr(config, "card_template_key", "content")
+
         self._client = None
+        self._http: httpx.AsyncClient | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
         self._stream_thread: threading.Thread | None = None
         self._stop_event = threading.Event()
         self._background_tasks: set[asyncio.Task] = set()
+
+        # Access Token 缓存
+        self._access_token: str | None = None
+        self._token_expiry: float = 0
+
+        # AI Card 状态管理
+        self._active_cards: dict[str, ActiveCard] = {}
+        self._cards_lock = asyncio.Lock()
+
+        # 会话上下文（用于 AI Card 创建）
+        self._session_contexts: dict[str, dict[str, Any]] = {}
 
     async def start(self) -> None:
         """启动钉钉 Bot"""
@@ -160,6 +205,13 @@ class DingTalkChannel(BaseChannel):
                     is_group = conversation_type == "2" and conversation_id
                     chat_id = f"group:{conversation_id}" if is_group else sender_id
 
+                    # 保存会话信息用于 AI Card 创建
+                    self.channel._session_contexts[chat_id] = {
+                        "conversation_id": conversation_id,
+                        "is_group": is_group,
+                        "sender_staff_id": chatbot_msg.sender_staff_id or sender_id,
+                    }
+
                     logger.info(
                         "Received DingTalk message from {} ({}): {}",
                         sender_name,
@@ -177,6 +229,9 @@ class DingTalkChannel(BaseChannel):
                         metadata={
                             "sender_name": sender_name,
                             "conversation_type": conversation_type,
+                            "sender_staff_id": chatbot_msg.sender_staff_id or sender_id,
+                            "conversation_id": conversation_id,
+                            "is_group": is_group,
                         },
                     )
 
@@ -304,15 +359,281 @@ class DingTalkChannel(BaseChannel):
             if self._stream_thread.is_alive():
                 logger.warning("DingTalk stream thread did not stop gracefully")
 
-        # 取消后台任务
+        # 完成 AI Card
         if self._loop and not self._loop.is_closed():
+            for conv_id, card in list(self._active_cards.items()):
+                if card.state not in (CARD_FINISHED, CARD_FAILED):
+                    try:
+                        await self._stream_ai_card(
+                            card, card.last_content or AI_CARD_PROCESSING_TEXT, finalize=True
+                        )
+                    except Exception:
+                        logger.debug("DingTalk finalize card on stop failed", exc_info=True)
+
+            # 取消后台任务
             for task in self._background_tasks:
                 if not task.done():
                     task.cancel()
             self._background_tasks.clear()
 
+        # 关闭 HTTP 客户端
+        if self._http:
+            await self._http.aclose()
+            self._http = None
+
         self._client = None
         logger.info("DingTalk channel stopped")
+
+    async def _get_access_token(self) -> str | None:
+        """获取 access_token（带缓存）"""
+        if self._access_token and time.time() < self._token_expiry:
+            return self._access_token
+
+        # 检查 SDK 客户端是否可用
+        if self._client:
+            try:
+                token = self._client.get_access_token()
+                if token:
+                    self._access_token = token
+                    self._token_expiry = time.time() + 3600  # 1小时过期
+                    return token
+            except Exception as e:
+                logger.warning("Failed to get token from SDK: {}", e)
+
+        # 手动获取 token
+        url = "https://api.dingtalk.com/v1.0/oauth2/accessToken"
+        data = {
+            "appKey": self.client_id,
+            "appSecret": self.client_secret,
+        }
+
+        if not self._http:
+            self._http = httpx.AsyncClient()
+
+        try:
+            resp = await self._http.post(url, json=data)
+            resp.raise_for_status()
+            result = resp.json()
+            self._access_token = result.get("accessToken")
+            self._token_expiry = time.time() + int(result.get("expireIn", 7200)) - 60
+            return self._access_token
+        except Exception as e:
+            logger.error("Failed to get DingTalk access token: {}", e)
+            return None
+
+    def _ai_card_enabled(self) -> bool:
+        """检查 AI Card 是否已配置"""
+        return bool(self.card_template_id)
+
+    async def _create_ai_card(
+        self,
+        conversation_id: str,
+        is_group: bool = False,
+        sender_staff_id: str = "",
+    ) -> ActiveCard | None:
+        """
+        创建 AI Card 用于进度显示。
+
+        钉钉 AI Card 需要两步：
+        1. 创建卡片实例 (card/instances)
+        2. 投递卡片到会话 (card/instances/deliver)
+
+        Args:
+            conversation_id: 会话 ID
+            is_group: 是否群聊
+            sender_staff_id: 发送者员工 ID（私聊需要）
+
+        Returns:
+            ActiveCard 或 None
+        """
+        if not self._ai_card_enabled():
+            return None
+
+        token = await self._get_access_token()
+        if not token:
+            return None
+
+        if not self._http:
+            self._http = httpx.AsyncClient()
+
+        card_instance_id = f"card_{uuid.uuid4()}"
+        headers = {
+            "Content-Type": "application/json",
+            "x-acs-dingtalk-access-token": token,
+        }
+
+        # Step 1: 创建卡片实例
+        create_url = "https://api.dingtalk.com/v1.0/card/instances"
+        create_payload: dict[str, Any] = {
+            "cardTemplateId": self.card_template_id,
+            "outTrackId": card_instance_id,
+            "cardData": {"cardParamMap": {self.card_template_key: ""}},
+            "callbackType": "STREAM",
+            "imGroupOpenSpaceModel": {"supportForward": True},
+            "imRobotOpenSpaceModel": {"supportForward": True},
+        }
+
+        try:
+            resp = await self._http.post(create_url, json=create_payload, headers=headers)
+            if resp.status_code >= 400:
+                logger.warning(
+                    "DingTalk create AI card failed: status={}, body={}",
+                    resp.status_code,
+                    resp.text[:500],
+                )
+                return None
+
+            logger.debug(
+                "DingTalk AI card instance created: card_instance_id={}",
+                card_instance_id,
+            )
+
+        except Exception as e:
+            logger.error("Failed to create DingTalk AI card instance: {}", e)
+            return None
+
+        # Step 2: 投递卡片到会话
+        if is_group:
+            open_space_id = f"dtv1.card//IM_GROUP.{conversation_id}"
+            deliver_payload = {
+                "outTrackId": card_instance_id,
+                "userIdType": 1,
+                "openSpaceId": open_space_id,
+                "imGroupOpenDeliverModel": {
+                    "robotCode": self.client_id,
+                },
+            }
+        else:
+            if not sender_staff_id:
+                logger.warning("DingTalk AI card need sender_staff_id for private chat")
+                return None
+            open_space_id = f"dtv1.card//IM_ROBOT.{sender_staff_id}"
+            deliver_payload = {
+                "outTrackId": card_instance_id,
+                "userIdType": 1,
+                "openSpaceId": open_space_id,
+                "imRobotOpenDeliverModel": {
+                    "spaceType": "IM_ROBOT",
+                },
+            }
+
+        deliver_url = "https://api.dingtalk.com/v1.0/card/instances/deliver"
+        try:
+            resp = await self._http.post(deliver_url, json=deliver_payload, headers=headers)
+            if resp.status_code >= 400:
+                logger.warning(
+                    "DingTalk deliver AI card failed: status={}, body={}",
+                    resp.status_code,
+                    resp.text[:500],
+                )
+                return None
+
+            logger.info(
+                "DingTalk AI card delivered: conversation_id={}, card_instance_id={}",
+                conversation_id,
+                card_instance_id,
+            )
+
+        except Exception as e:
+            logger.error("Failed to deliver DingTalk AI card: {}", e)
+            return None
+
+        now_ms = int(time.time() * 1000)
+        card = ActiveCard(
+            card_instance_id=card_instance_id,
+            access_token=token,
+            conversation_id=conversation_id,
+            created_at=now_ms,
+            last_updated=now_ms,
+            state=CARD_PROCESSING,
+        )
+        async with self._cards_lock:
+            self._active_cards[conversation_id] = card
+        return card
+
+    async def _stream_ai_card(
+        self,
+        card: ActiveCard,
+        content: str,
+        finalize: bool = False,
+    ) -> bool:
+        """更新 AI Card 内容"""
+        if card.state in (CARD_FINISHED, CARD_FAILED):
+            return False
+
+        content = (content or "").strip()
+        if not content:
+            return False
+
+        now_ms = int(time.time() * 1000)
+
+        # 节流：非 finalize 时限制更新频率
+        if not finalize:
+            if content == card.last_content:
+                return False
+            if (now_ms - card.last_updated) < AI_CARD_MIN_INTERVAL_SECONDS * 1000:
+                return False
+
+        token = await self._get_access_token()
+        if not token:
+            return False
+
+        if not self._http:
+            self._http = httpx.AsyncClient()
+
+        payload = {
+            "outTrackId": card.card_instance_id,
+            "guid": str(uuid.uuid4()),
+            "key": self.card_template_key,
+            "content": content,
+            "isFull": True,
+            "isFinalize": finalize,
+            "isError": False,
+        }
+        url = "https://api.dingtalk.com/v1.0/card/streaming"
+        headers = {
+            "Content-Type": "application/json",
+            "x-acs-dingtalk-access-token": token,
+        }
+
+        try:
+            resp = await self._http.put(url, json=payload, headers=headers)
+            if resp.status_code == 401:
+                # Token 过期，刷新后重试
+                token = await self._get_access_token()
+                if token:
+                    headers["x-acs-dingtalk-access-token"] = token
+                    resp = await self._http.put(url, json=payload, headers=headers)
+
+            if resp.status_code >= 400:
+                logger.warning(
+                    "DingTalk stream AI card failed: status={}, body={}",
+                    resp.status_code,
+                    resp.text[:500],
+                )
+                return False
+
+            logger.debug(
+                "DingTalk AI card updated: conversation_id={}, finalize={}",
+                card.conversation_id,
+                finalize,
+            )
+
+            card.last_content = content
+            card.last_updated = now_ms
+
+            if finalize:
+                card.state = CARD_FINISHED
+                async with self._cards_lock:
+                    self._active_cards.pop(card.conversation_id, None)
+            elif card.state == CARD_PROCESSING:
+                card.state = CARD_INPUTING
+
+            return True
+
+        except Exception as e:
+            logger.error("Failed to stream DingTalk AI card: {}", e)
+            return False
 
     async def send(self, msg: OutboundMessage) -> None:
         """
@@ -323,62 +644,92 @@ class DingTalkChannel(BaseChannel):
         Args:
             msg: 出站消息
         """
-        if not self._client:
-            logger.warning("DingTalk client not initialized, cannot send message")
+        token = await self._get_access_token()
+        if not token:
+            logger.warning("DingTalk access token not available")
             return
 
+        if not self._http:
+            self._http = httpx.AsyncClient()
+
+        chat_id = msg.chat_id
+        headers = {"x-acs-dingtalk-access-token": token}
+
+        # 检查是否有活跃的 AI Card
+        conversation_id = chat_id[6:] if chat_id.startswith("group:") else chat_id
+        card = self._active_cards.get(conversation_id)
+
+        # 如果有活跃的 AI Card，尝试 finalize 并发送
+        if card and self._ai_card_enabled():
+            await self._stream_ai_card(card, msg.content, finalize=True)
+            return
+
+        # 常规消息发送
+        if chat_id.startswith("group:"):
+            url = "https://api.dingtalk.com/v1.0/robot/groupMessages/send"
+            payload = {
+                "robotCode": self.client_id,
+                "openConversationId": chat_id[6:],
+                "msgKey": "sampleMarkdown",
+                "msgParam": json.dumps(
+                    {"title": "Reply", "text": msg.content}, ensure_ascii=False
+                ),
+            }
+        else:
+            url = "https://api.dingtalk.com/v1.0/robot/oToMessages/batchSend"
+            payload = {
+                "robotCode": self.client_id,
+                "userIds": [chat_id],
+                "msgKey": "sampleMarkdown",
+                "msgParam": json.dumps(
+                    {"title": "Reply", "text": msg.content}, ensure_ascii=False
+                ),
+            }
+
         try:
-            # 获取 access_token
-            token = self._client.get_access_token()
-            if not token:
-                logger.error("Failed to get DingTalk access token")
-                return
-
-            # 通过 HTTP API 发送消息
-            import httpx
-            import json
-
-            headers = {"x-acs-dingtalk-access-token": token}
-            chat_id = msg.chat_id
-
-            if chat_id.startswith("group:"):
-                # 群聊消息
-                url = "https://api.dingtalk.com/v1.0/robot/groupMessages/send"
-                payload = {
-                    "robotCode": self.client_id,
-                    "openConversationId": chat_id[6:],  # 移除 "group:" 前缀
-                    "msgKey": "sampleMarkdown",
-                    "msgParam": json.dumps({"title": "Reply", "text": msg.content}, ensure_ascii=False),
-                }
+            resp = await self._http.post(url, json=payload, headers=headers)
+            if resp.status_code != 200:
+                logger.error(
+                    "DingTalk send failed: status={}, body={}",
+                    resp.status_code,
+                    resp.text[:500],
+                )
             else:
-                # 私聊消息
-                url = "https://api.dingtalk.com/v1.0/robot/oToMessages/batchSend"
-                payload = {
-                    "robotCode": self.client_id,
-                    "userIds": [chat_id],
-                    "msgKey": "sampleMarkdown",
-                    "msgParam": json.dumps({"title": "Reply", "text": msg.content}, ensure_ascii=False),
-                }
-
-            async with httpx.AsyncClient() as client:
-                resp = await client.post(url, json=payload, headers=headers)
-                if resp.status_code != 200:
-                    logger.error("DingTalk send failed: status={}, body={}", resp.status_code, resp.text[:500])
-                else:
-                    logger.debug("DingTalk message sent to {}", chat_id)
-
+                logger.debug("DingTalk message sent to {}", chat_id)
         except Exception as e:
             logger.error("Error sending DingTalk message: {}", e)
 
     async def send_progress(self, chat_id: str, content: str) -> None:
         """
-        发送进度更新。
+        发送进度更新（使用 AI Card）。
 
-        钉钉不支持"正在输入"状态。
+        如果配置了 card_template_id，会创建/更新 AI Card 显示进度。
+        这类似于 CLI 中的 spinner 效果，让用户知道 Agent 正在工作。
 
         Args:
             chat_id: 会话 ID
             content: 进度内容
         """
-        # 钉钉不支持输入状态
-        pass
+        if not self._ai_card_enabled():
+            # 未配置 AI Card，不支持进度显示
+            return
+
+        conversation_id = chat_id[6:] if chat_id.startswith("group:") else chat_id
+
+        # 获取或创建 AI Card
+        async with self._cards_lock:
+            card = self._active_cards.get(conversation_id)
+
+        if not card:
+            # 获取会话上下文
+            ctx = self._session_contexts.get(chat_id, {})
+            card = await self._create_ai_card(
+                conversation_id=conversation_id,
+                is_group=ctx.get("is_group", False),
+                sender_staff_id=ctx.get("sender_staff_id", ""),
+            )
+            if not card:
+                return
+
+        # 更新 AI Card 内容
+        await self._stream_ai_card(card, content, finalize=False)

@@ -59,6 +59,13 @@ async def _run_bot(cfg, lang: Language) -> None:
     from deepcobot.bus.queue import MessageBus
     from deepcobot.channels import ChannelManager, InboundMessage, OutboundMessage
     from deepcobot.cron import CronService, HeartbeatService
+    from deepcobot.services import (
+        HealthChecker,
+        MetricsCollector,
+        get_metrics_collector,
+        run_health_server,
+        run_metrics_server,
+    )
 
     # 创建 Agent
     resources = await create_agent_async(cfg)
@@ -68,6 +75,19 @@ async def _run_bot(cfg, lang: Language) -> None:
     # 创建消息总线
     bus = MessageBus()
 
+    # 创建健康检查器
+    health_checker = HealthChecker()
+
+    # 创建指标收集器
+    metrics = get_metrics_collector()
+
+    # 注册健康检查
+    health_checker.add_check("bus", lambda: bus._running)
+    health_checker.add_check("agent", lambda: True)  # Agent 创建成功即为健康
+
+    # 服务任务列表
+    service_tasks: list[asyncio.Task] = []
+
     # 记录上次交互渠道
     last_dispatch: dict[str, str] = {}
 
@@ -75,11 +95,16 @@ async def _run_bot(cfg, lang: Language) -> None:
     async def agent_handler(msg: InboundMessage) -> OutboundMessage | None:
         """处理入站消息并返回响应"""
         nonlocal last_dispatch
+        import time
 
         # 记录上次交互渠道（排除 heartbeat 自身）
         if msg.channel != "heartbeat":
             last_dispatch = {"channel": msg.channel, "chat_id": msg.chat_id}
 
+        # 记录请求计数
+        metrics.inc_requests(msg.channel)
+
+        start_time = time.time()
         thread_config = {
             "configurable": {
                 "thread_id": msg.chat_id,
@@ -111,6 +136,10 @@ async def _run_bot(cfg, lang: Language) -> None:
                         content = m.get("content", "") or ""
                         break
 
+            # 记录成功调用
+            metrics.inc_agent_invocations("success")
+            metrics.observe_request_duration(msg.channel, time.time() - start_time)
+
             if content:
                 return OutboundMessage(
                     channel=msg.channel,
@@ -120,6 +149,7 @@ async def _run_bot(cfg, lang: Language) -> None:
 
         except Exception as e:
             logger.error(f"Agent error: {e}")
+            metrics.inc_agent_invocations("error")
             return OutboundMessage(
                 channel=msg.channel,
                 chat_id=msg.chat_id,
@@ -276,6 +306,27 @@ async def _run_bot(cfg, lang: Language) -> None:
     for name, channel in manager.channels.items():
         task = asyncio.create_task(manager._start_channel(name, channel))
         channel_tasks.append(task)
+        # 设置渠道状态指标
+        metrics.set_channel_status(name, True)
+
+    # 启动健康检查服务
+    if cfg.services.health_enabled:
+        health_task = asyncio.create_task(
+            run_health_server(
+                health_checker,
+                port=cfg.services.health_port,
+            )
+        )
+        service_tasks.append(health_task)
+        console.print(f"  • health (port {cfg.services.health_port})")
+
+    # 启动指标服务
+    if cfg.services.metrics_enabled:
+        metrics_task = asyncio.create_task(
+            run_metrics_server(port=cfg.services.metrics_port)
+        )
+        service_tasks.append(metrics_task)
+        console.print(f"  • metrics (port {cfg.services.metrics_port})")
 
     # 启动 Heartbeat 服务
     await heartbeat.start()
@@ -285,8 +336,11 @@ async def _run_bot(cfg, lang: Language) -> None:
     # 启动 Cron 服务
     await cron.start()
     enabled_jobs = len([j for j in cron.list_jobs() if j.enabled])
+    disabled_jobs = len([j for j in cron.list_jobs() if not j.enabled])
     if enabled_jobs > 0:
         console.print(f"  • cron ({enabled_jobs} jobs)")
+    # 设置 Cron 指标
+    metrics.set_cron_jobs(enabled_jobs, disabled_jobs)
 
     console.print(f"[dim]{t('serve.ctrlc', lang)}[/dim]")
 
@@ -301,6 +355,14 @@ async def _run_bot(cfg, lang: Language) -> None:
 
     # 取消渠道任务
     for task in channel_tasks:
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+    # 取消服务任务
+    for task in service_tasks:
         task.cancel()
         try:
             await task

@@ -101,12 +101,22 @@ def build_skills_sources(config: Config) -> list[str] | None:
         技能目录路径列表，如果未启用则返回 None
     """
     if not config.agent.enable_skills:
+        logger.info("Skills disabled by config")
         return None
 
     workspace = config.agent.workspace
     skills_dir = workspace / "skills"
-    logger.info(f"Skills enabled: {skills_dir}")
-    return [str(skills_dir)]
+    skills_dir_str = str(skills_dir)
+
+    # 检查 skills 目录是否存在
+    if skills_dir.exists():
+        # 列出子目录（skills）
+        subdirs = [d.name for d in skills_dir.iterdir() if d.is_dir() and not d.name.startswith('.')]
+        logger.info(f"Skills enabled: {skills_dir_str}, found {len(subdirs)} skill(s): {subdirs}")
+    else:
+        logger.warning(f"Skills directory not found: {skills_dir_str}")
+
+    return [skills_dir_str]
 
 
 def build_async_subagents(config: Config) -> list[dict[str, str]]:

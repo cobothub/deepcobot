@@ -13,6 +13,10 @@ model = "anthropic:claude-sonnet-4-6"
 # 最大输出 token 数
 max_tokens = 8192
 
+# 最大递归深度（防止无限循环）
+# 默认: 50，复杂多步骤任务可适当增加
+recursion_limit = 50
+
 # 系统提示词（可选，默认自动生成）
 # system_prompt = """你是一个有用的 AI 助手..."""
 

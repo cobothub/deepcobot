@@ -12,6 +12,7 @@ from rich.panel import Panel
 
 from deepcobot import __version__, apply_config
 from deepcobot.config import load_config
+from deepcobot.agent import AgentSession
 from deepcobot.cli.i18n import t, Language
 from deepcobot.cli.context import setup_language
 
@@ -55,7 +56,6 @@ def bot_cmd(
 
 async def _run_bot(cfg, lang: Language) -> None:
     """Run bot channels."""
-    from deepcobot.agent.factory import create_agent_async
     from deepcobot.bus.queue import MessageBus
     from deepcobot.channels import ChannelManager, InboundMessage, OutboundMessage
     from deepcobot.cron import CronService, HeartbeatService
@@ -66,11 +66,13 @@ async def _run_bot(cfg, lang: Language) -> None:
         run_health_server,
         run_metrics_server,
     )
+    from deepcobot.agent.approval import get_approval_manager
 
-    # 创建 Agent
-    resources = await create_agent_async(cfg)
-    graph = resources["graph"]
-    workspace = resources["workspace"]
+    # 创建共享的 AgentSession 实例
+    session = AgentSession(cfg)
+
+    # 获取审批管理器
+    approval_manager = get_approval_manager()
 
     # 创建消息总线
     bus = MessageBus()
@@ -91,7 +93,7 @@ async def _run_bot(cfg, lang: Language) -> None:
     # 记录上次交互渠道
     last_dispatch: dict[str, str] = {}
 
-    # Agent 消息处理函数
+    # Agent 消息处理函数（使用 AgentSession）
     async def agent_handler(msg: InboundMessage) -> OutboundMessage | None:
         """处理入站消息并返回响应"""
         nonlocal last_dispatch
@@ -101,54 +103,61 @@ async def _run_bot(cfg, lang: Language) -> None:
         if msg.channel != "heartbeat":
             last_dispatch = {"channel": msg.channel, "chat_id": msg.chat_id}
 
+        # 生成会话标识
+        session_key = f"{msg.channel}:{msg.chat_id}"
+
+        # 检查是否是审批响应
+        if approval_manager.has_pending(session_key):
+            handled = approval_manager.handle_response(session_key, msg.content)
+            if handled:
+                logger.info(f"[Agent] Message treated as approval response for {session_key}")
+                # 审批响应会被等待中的 session.invoke 处理
+                # 这里不需要发送任何消息，结果会由原来的 invoke 流程发送
+                return None
+            # 如果不是有效的审批响应，继续正常处理
+
         # 记录请求计数
         metrics.inc_requests(msg.channel)
 
         start_time = time.time()
-        thread_config = {
-            "configurable": {
-                "thread_id": msg.chat_id,
-            }
-        }
+
+        # 设置会话上下文
+        session.set_thread_id(msg.chat_id)
+        session.set_channel_context(msg.channel, msg.chat_id)
+
+        # 设置消息发送回调（用于审批交互）
+        async def send_callback(chat_id: str, content: str) -> None:
+            """发送消息回调"""
+            await bus.publish_outbound(OutboundMessage(
+                channel=msg.channel,
+                chat_id=chat_id,
+                content=content,
+            ))
+
+        session.set_send_callback(send_callback)
+
+        logger.debug(f"[Agent] Starting invoke for {msg.channel}:{msg.chat_id}")
+        logger.debug(f"[Agent] Input: {msg.content[:200]}..." if len(msg.content) > 200 else f"[Agent] Input: {msg.content}")
 
         try:
-            result = await graph.ainvoke(
-                {"messages": [{"role": "user", "content": msg.content}]},
-                config=thread_config,
-            )
-
-            # 提取最后一条助手消息
-            content = ""
-            if "messages" in result:
-                for m in reversed(result["messages"]):
-                    msg_type = type(m).__name__
-                    if msg_type == "AIMessage":
-                        content = m.content
-                        if isinstance(content, list):
-                            texts = []
-                            for item in content:
-                                if isinstance(item, dict) and item.get("type") == "text":
-                                    texts.append(item.get("text", ""))
-                            content = "\n".join(texts) if texts else ""
-                        content = str(content) if content else ""
-                        break
-                    elif isinstance(m, dict) and m.get("role") == "assistant":
-                        content = m.get("content", "") or ""
-                        break
+            response = await session.invoke(msg.content)
 
             # 记录成功调用
             metrics.inc_agent_invocations("success")
             metrics.observe_request_duration(msg.channel, time.time() - start_time)
 
-            if content:
+            logger.debug(f"[Agent] Response length: {len(response)} chars")
+
+            if response:
                 return OutboundMessage(
                     channel=msg.channel,
                     chat_id=msg.chat_id,
-                    content=content,
+                    content=response,
                 )
 
         except Exception as e:
             logger.error(f"Agent error: {e}")
+            logger.debug(f"[Agent] Error details: {type(e).__name__}: {e}")
             metrics.inc_agent_invocations("error")
             return OutboundMessage(
                 channel=msg.channel,
@@ -171,43 +180,31 @@ async def _run_bot(cfg, lang: Language) -> None:
     for name, channel in manager.channels.items():
         console.print(f"  • {name}")
 
-    # Heartbeat 回调
+    # Heartbeat 回调（使用 AgentSession）
     async def on_heartbeat_execute(content: str, session_key: str, channel: str) -> str:
         """Heartbeat 执行回调"""
-        thread_config = {
-            "configurable": {
-                "thread_id": session_key,
-            }
-        }
+        import time
+        start_time = time.time()
+
+        # 设置会话上下文
+        session.set_thread_id(session_key)
+        session.set_channel_context(channel, session_key)
+
+        logger.debug(f"[Heartbeat] Starting execution for session: {session_key}")
+        logger.debug(f"[Heartbeat] Content: {content[:200]}..." if len(content) > 200 else f"[Heartbeat] Content: {content}")
 
         try:
-            result = await graph.ainvoke(
-                {"messages": [{"role": "user", "content": content}]},
-                config=thread_config,
-            )
+            response = await session.invoke(content)
 
-            # 提取响应
-            response = ""
-            if "messages" in result:
-                for m in reversed(result["messages"]):
-                    msg_type = type(m).__name__
-                    if msg_type == "AIMessage":
-                        response = str(m.content or "")
-                        if isinstance(m.content, list):
-                            texts = []
-                            for item in m.content:
-                                if isinstance(item, dict) and item.get("type") == "text":
-                                    texts.append(item.get("text", ""))
-                            response = "\n".join(texts) if texts else ""
-                        break
-                    elif isinstance(m, dict) and m.get("role") == "assistant":
-                        response = m.get("content", "") or ""
-                        break
+            duration = time.time() - start_time
+            logger.debug(f"[Heartbeat] Execution completed in {duration:.2f}s")
+            logger.debug(f"[Heartbeat] Response length: {len(response)} chars")
 
             return response
 
         except Exception as e:
             logger.error(f"Heartbeat agent error: {e}")
+            logger.debug(f"[Heartbeat] Error details: {type(e).__name__}: {e}")
             return ""
 
     def get_last_dispatch() -> tuple[str, str] | None:
@@ -216,46 +213,35 @@ async def _run_bot(cfg, lang: Language) -> None:
             return last_dispatch.get("channel"), last_dispatch.get("chat_id")
         return None
 
-    # Cron 执行回调
+    # Cron 执行回调（使用 AgentSession）
     async def on_cron_execute(message: str, session_key: str, channel: str) -> str:
         """Cron 任务执行回调"""
-        thread_config = {
-            "configurable": {
-                "thread_id": session_key,
-            }
-        }
+        import time
+        start_time = time.time()
+
+        # 设置会话上下文
+        session.set_thread_id(session_key)
+        session.set_channel_context(channel, session_key)
+
+        logger.debug(f"[Cron] Starting execution for session: {session_key}")
+        logger.debug(f"[Cron] Message: {message[:200]}..." if len(message) > 200 else f"[Cron] Message: {message}")
 
         try:
-            result = await graph.ainvoke(
-                {"messages": [{"role": "user", "content": message}]},
-                config=thread_config,
-            )
+            response = await session.invoke(message)
 
-            # 提取响应
-            response = ""
-            if "messages" in result:
-                for m in reversed(result["messages"]):
-                    msg_type = type(m).__name__
-                    if msg_type == "AIMessage":
-                        response = str(m.content or "")
-                        if isinstance(m.content, list):
-                            texts = []
-                            for item in m.content:
-                                if isinstance(item, dict) and item.get("type") == "text":
-                                    texts.append(item.get("text", ""))
-                            response = "\n".join(texts) if texts else ""
-                        break
-                    elif isinstance(m, dict) and m.get("role") == "assistant":
-                        response = m.get("content", "") or ""
-                        break
+            duration = time.time() - start_time
+            logger.debug(f"[Cron] Execution completed in {duration:.2f}s")
+            logger.debug(f"[Cron] Response length: {len(response)} chars")
 
             return response
 
         except Exception as e:
             logger.error(f"Cron agent error: {e}")
+            logger.debug(f"[Cron] Error details: {type(e).__name__}: {e}")
             return ""
 
     # 创建 Heartbeat 服务
+    workspace = cfg.agent.workspace
     heartbeat = HeartbeatService(
         workspace=workspace,
         bus=bus,

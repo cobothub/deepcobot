@@ -3,7 +3,6 @@
 
 # @Time    : 2026/03/19 10:08
 # @Author  : geminrong
-# @Email   : geminrong.gmr@digital-engine.com
 # @FileName: test_create_agent.py
 """
 测试创建 Agent 并将 graph 转换为图片

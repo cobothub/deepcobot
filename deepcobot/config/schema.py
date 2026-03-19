@@ -111,6 +111,10 @@ class AgentDefaults(BaseModel):
         description="LLM 模型，格式: provider:model_name",
     )
     max_tokens: int = Field(default=8192, description="最大输出 token 数")
+    recursion_limit: int = Field(
+        default=50,
+        description="Agent 执行的最大递归深度（防止无限循环）",
+    )
     system_prompt: str | None = Field(None, description="自定义系统提示词")
     enable_memory: bool = Field(default=True, description="是否启用记忆系统")
     enable_skills: bool = Field(default=True, description="是否启用技能系统")

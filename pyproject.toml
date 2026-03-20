@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "deepcobot"
 version = "0.1.0"
-description = "DeepCoBot - A minimalist personal AI assistant framework built on DeepAgents"
+description = "DeepCoBot - Production-ready AI assistant framework powered by DeepAgents & LangGraph ecosystem"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.11"

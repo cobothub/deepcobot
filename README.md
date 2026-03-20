@@ -5,21 +5,87 @@
 
 [中文文档](README_CN.md) | English
 
-A minimalist personal AI assistant framework built on [DeepAgents](https://github.com/langchain-ai/deepagents).
+**Production-Ready AI Assistant Framework powered by [DeepAgents](https://github.com/langchain-ai/deepagents) & [LangGraph](https://github.com/langchain-ai/langgraph).**
+
+DeepCoBot bridges the LangChain/LangGraph ecosystem with real-world deployment scenarios, providing enterprise-grade AI agents with multi-channel support, visual debugging, and comprehensive observability.
+
+## Why DeepCoBot?
+
+Built on the powerful [DeepAgents SDK](https://github.com/langchain-ai/deepagents), DeepCoBot extends its capabilities for production use:
+
+| Feature | What You Get |
+|---------|-------------|
+| 🧠 **Intelligent Memory** | Persistent conversation memory with semantic recall |
+| 🛠️ **Extensible Skills** | Custom skill system for domain-specific capabilities |
+| 🔄 **State Management** | LangGraph checkpointer for pause/resume workflows |
+| 📊 **Full Observability** | LangSmith tracing, Prometheus metrics, structured logs |
+| 🌐 **Multi-Channel** | Telegram, Discord, Feishu, DingTalk, Web API, CLI |
+| 🎨 **Visual Debugging** | LangGraph Studio & DeepAgents UI integration |
+| 🔌 **MCP Support** | Model Context Protocol for external tool integration |
+
+## Ecosystem Advantage
+
+DeepCoBot leverages the full power of the LangChain ecosystem:
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                    DeepCoBot Architecture                           │
+├─────────────────────────────────────────────────────────────────────┤
+│                                                                     │
+│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐                 │
+│  │  Claude     │  │  GPT-4o     │  │  DeepSeek   │  Multi-Model    │
+│  │  Anthropic  │  │  OpenAI     │  │  Qwen/Local │  Support        │
+│  └──────┬──────┘  └──────┬──────┘  └──────┬──────┘                 │
+│         │                │                │                         │
+│         └────────────────┼────────────────┘                         │
+│                          ▼                                          │
+│  ┌───────────────────────────────────────────────────────────────┐ │
+│  │                    DeepAgents SDK                              │ │
+│  │  ┌──────────────┐ ┌──────────────┐ ┌──────────────┐           │ │
+│  │  │   Memory     │ │   Skills     │ │  Filesystem  │   Core    │ │
+│  │  │  Middleware  │ │  Middleware  │ │  Middleware  │   Engine   │ │
+│  │  └──────────────┘ └──────────────┘ └──────────────┘           │ │
+│  │  ┌──────────────┐ ┌──────────────┐ ┌──────────────┐           │ │
+│  │  │ Local Shell  │ │  SQLite Save │ │ MCP Adapters │           │ │
+│  │  │   Backend    │ │  Checkpoint  │ │  (External)  │           │ │
+│  │  └──────────────┘ └──────────────┘ └──────────────┘           │ │
+│  └───────────────────────────────────────────────────────────────┘ │
+│                          │                                          │
+│                          ▼                                          │
+│  ┌───────────────────────────────────────────────────────────────┐ │
+│  │                    LangGraph Runtime                           │ │
+│  │   Graph Orchestration │ State Persistence │ Streaming        │ │
+│  └───────────────────────────────────────────────────────────────┘ │
+│                          │                                          │
+│         ┌────────────────┼────────────────┐                         │
+│         ▼                ▼                ▼                         │
+│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐                 │
+│  │ LangSmith   │  │ LangGraph   │  │ DeepAgents  │   Observability │
+│  │ Tracing     │  │ Studio      │  │ UI          │   & Debug       │
+│  └─────────────┘  └─────────────┘  └─────────────┘                 │
+│                                                                     │
+├─────────────────────────────────────────────────────────────────────┤
+│  ┌─────────────────────────────────────────────────────────────┐   │
+│  │                    Channel Layer                              │   │
+│  │  Telegram │ Discord │ Feishu │ DingTalk │ Web API │ CLI    │   │
+│  └─────────────────────────────────────────────────────────────┘   │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+### What You Get from the Ecosystem
+
+| From | Benefits |
+|------|----------|
+| **LangGraph** | Graph-based agent orchestration, state persistence, human-in-the-loop, streaming support |
+| **LangChain** | 100+ tool integrations, document loaders, vector stores, output parsers |
+| **LangSmith** | Production tracing, prompt versioning, evaluation datasets, cost tracking |
+| **DeepAgents SDK** | Reference agent implementation, middleware patterns, shell sandbox |
+| **MCP** | Universal tool protocol for external services (files, APIs, databases) |
 
 ## Requirements
 
 - Python >= 3.11
-- DeepAgents SDK (requires Python >= 3.11)
-
-## Features
-
-- **Configuration-Driven**: Everything is configurable, zero-code startup via TOML files
-- **Multi-Channel Support**: CLI, Telegram, Discord, Feishu, DingTalk, Web API
-- **DeepAgents Integration**: Built-in memory system, skills system, tool approval
-- **LangGraph Compatible**: Support for LangGraph server deployment
-- **DeepAgents UI**: Support integration with deepagents-ui web interface for real-time chat, thread management, and file visualization
-- **Observability**: Built-in health checks, Prometheus metrics, structured logging, LangSmith tracing support
+- DeepAgents SDK >= 0.4
 
 ## Quick Start
 
@@ -430,35 +496,18 @@ ruff check deepcobot
 mypy deepcobot
 ```
 
-## Architecture
+## Message Flow
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                         DeepCoBot                               │
-├─────────────────────────────────────────────────────────────────┤
-│  Channel Layer  │  Telegram  │  Discord  │  Feishu  │  DingTalk  │  Web API  │  CLI  │
-│                 └───────────────────────┬───────────────────────┘
-│                                           │
-│                                           ▼
-│  Message Bus Layer                   MessageBus (Async Queue)
-│                                           │
-│                                           ▼
-│  Agent Core Layer                    DeepCoBotAgent (SDK Wrapper)
-│                                           │
-├───────────────────────────────────────────┼──────────────────────┤
-│  DeepAgents SDK                           │
-│  ┌─────────────┐ ┌─────────────┐ ┌─────────────┐                │
-│  │Filesystem   │ │  Memory     │ │  Skills     │                │
-│  │Middleware   │ │ Middleware  │ │ Middleware  │                │
-│  └─────────────┘ └─────────────┘ └─────────────┘                │
-│  ┌─────────────┐ ┌─────────────┐ ┌─────────────┐                │
-│  │LocalShell   │ │ SqliteSaver │ │ AsyncSub    │                │
-│  │Backend      │ │(Checkpointer)│ │AgentMiddle  │                │
-│  └─────────────┘ └─────────────┘ └─────────────┘                │
-├─────────────────────────────────────────────────────────────────┤
-│  Service Layer        │ CronService │ Heartbeat │ LangGraph     │
-└─────────────────────────────────────────────────────────────────┘
+Inbound:  Channel → MessageBus → DeepAgents SDK → LLM
+Outbound: LLM → DeepAgents SDK → MessageBus → Channel
 ```
+
+**Core Components:**
+- **MessageBus**: Async queue for bidirectional message routing
+- **DeepAgents SDK**: Core agent engine with memory, skills, filesystem middleware
+- **LangGraph Runtime**: State persistence, checkpoint recovery, streaming support
+- **Channel Adapters**: Unified interface for multi-platform deployment
 
 ## License
 
@@ -476,9 +525,9 @@ This project draws design inspiration from the following excellent projects:
 
 ### Design Philosophy
 
-DeepCoBot's core philosophy is **minimalist encapsulation**, focusing on the configuration layer and channel integration layer that DeepAgents doesn't provide, maximizing reuse of existing capabilities. By learning from the design excellence of the above projects, we achieved:
+DeepCoBot's core philosophy is **production-ready by default**, bridging the gap between DeepAgents SDK capabilities and real-world deployment needs. By learning from the design excellence of the above projects, we provide:
 
-- Clear layered architecture (Config Layer → Channel Layer → Agent Layer → Service Layer)
-- Extensible channel integration mechanism
-- Unified message processing flow
-- Comprehensive service governance capabilities
+- **Ecosystem Integration**: Seamless integration with LangChain tools, LangGraph workflows, and LangSmith observability
+- **Multi-Channel Deployment**: Unified message processing across Telegram, Discord, Feishu, DingTalk, Web API, and CLI
+- **Enterprise-Grade Features**: Persistent memory, skill extensibility, tool approval, and health monitoring
+- **Developer Experience**: Configuration-driven setup with visual debugging support via LangGraph Studio

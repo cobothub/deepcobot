@@ -47,11 +47,15 @@ auto_approve = false
 [providers.anthropic]
 api_key = "${ANTHROPIC_API_KEY}"
 # api_base = "https://api.anthropic.com"  # 可选，自定义 API 端点
+# 自定义请求头（可选，用于代理或自定义授权等场景）
+# headers = { "X-Custom-Header" = "custom-value" }
 
 # OpenAI 配置
 [providers.openai]
 api_key = "${OPENAI_API_KEY}"
 # api_base = "https://api.openai.com/v1"  # 可选，自定义 API 端点
+# 自定义请求头（可选，用于代理或自定义授权等场景）
+# headers = { "X-Custom-Header" = "custom-value" }
 
 # DeepSeek 配置（OpenAI 兼容格式）
 # [providers.deepseek]

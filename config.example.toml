@@ -47,11 +47,15 @@ auto_approve = false
 [providers.anthropic]
 api_key = "${ANTHROPIC_API_KEY}"
 # api_base = "https://api.anthropic.com"  # Optional, custom API endpoint
+# Custom headers (optional, for proxy or custom authorization)
+# headers = { "X-Custom-Header" = "custom-value" }
 
 # OpenAI configuration
 [providers.openai]
 api_key = "${OPENAI_API_KEY}"
 # api_base = "https://api.openai.com/v1"  # Optional, custom API endpoint
+# Custom headers (optional, for proxy or custom authorization)
+# headers = { "X-Custom-Header" = "custom-value" }
 
 # DeepSeek configuration (OpenAI-compatible)
 # [providers.deepseek]

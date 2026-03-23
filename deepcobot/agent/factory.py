@@ -19,7 +19,7 @@ from deepcobot.agent.builder import (
     build_memory_sources,
     build_skills_sources,
     build_async_subagents,
-    setup_api_key,
+    create_model_instance,
     get_interrupt_config,
     build_compact_tool_middleware,
     build_mcp_tools,
@@ -127,7 +127,7 @@ def create_agent(config: Config) -> dict[str, Any]:
     middlewares = build_middlewares(config)
     memory_sources = build_memory_sources(config)
     skills_sources = build_skills_sources(config)
-    provider, model_name = setup_api_key(config)
+    model_instance, provider, model_name = create_model_instance(config)
     interrupt_on = get_interrupt_config(config)
     async_subagents = build_async_subagents(config)
 
@@ -144,7 +144,7 @@ def create_agent(config: Config) -> dict[str, Any]:
         effective_backend = backend
 
     agent_kwargs: dict[str, Any] = {
-        "model": model,
+        "model": model_instance,
         "system_prompt": system_prompt,
         "backend": effective_backend,
         "checkpointer": checkpointer,
@@ -201,7 +201,7 @@ async def create_agent_async(config: Config) -> dict[str, Any]:
     middlewares = build_middlewares(config)
     memory_sources = build_memory_sources(config)
     skills_sources = build_skills_sources(config)
-    provider, model_name = setup_api_key(config)
+    model_instance, provider, model_name = create_model_instance(config)
     interrupt_on = get_interrupt_config(config)
     async_subagents = build_async_subagents(config)
 
@@ -221,7 +221,7 @@ async def create_agent_async(config: Config) -> dict[str, Any]:
     mcp_tools = await build_mcp_tools(config, exit_stack)
 
     agent_kwargs: dict[str, Any] = {
-        "model": model,
+        "model": model_instance,
         "system_prompt": system_prompt,
         "backend": effective_backend,
         "checkpointer": checkpointer,

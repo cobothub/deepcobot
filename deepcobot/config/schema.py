@@ -17,6 +17,7 @@ class ProviderConfig(BaseModel):
 
     api_key: str = Field(..., description="API 密钥")
     api_base: str | None = Field(None, description="自定义 API 端点")
+    headers: dict[str, str] = Field(default_factory=dict, description="自定义请求头")
 
 
 class TelegramChannelConfig(BaseModel):

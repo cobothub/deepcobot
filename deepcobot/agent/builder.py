@@ -210,6 +210,8 @@ def setup_api_key(config: Config) -> tuple[str, str]:
     """
     设置 API 密钥环境变量。
 
+    注意：此函数已被 create_model_instance 取代，保留用于向后兼容。
+
     Args:
         config: 配置对象
 
@@ -240,6 +242,65 @@ def setup_api_key(config: Config) -> tuple[str, str]:
                 os.environ["ANTHROPIC_BASE_URL"] = api_base
 
     return provider, model_name
+
+
+def create_model_instance(config: Config) -> tuple[Any, str, str]:
+    """
+    创建 LLM 模型实例。
+
+    根据配置创建 ChatAnthropic 或 ChatOpenAI 实例，支持自定义 headers。
+
+    Args:
+        config: 配置对象
+
+    Returns:
+        (model_instance, provider, model_name) 元组
+    """
+    model_str = config.agent.model
+    if ":" in model_str:
+        provider, model_name = model_str.split(":", 1)
+    else:
+        provider = "anthropic"
+        model_name = model_str
+
+    provider_config = config.get_provider(provider)
+    api_key = provider_config.api_key if provider_config else None
+    api_base = provider_config.api_base if provider_config else None
+    headers = provider_config.headers if provider_config else {}
+
+    if provider == "openai":
+        from langchain_openai import ChatOpenAI
+
+        model_kwargs: dict[str, Any] = {
+            "model": model_name,
+        }
+        if api_key:
+            model_kwargs["api_key"] = api_key
+        if api_base:
+            model_kwargs["base_url"] = api_base
+        if headers:
+            model_kwargs["default_headers"] = headers
+
+        model_instance = ChatOpenAI(**model_kwargs)
+        logger.info(f"Created OpenAI model: {model_name}, custom headers: {bool(headers)}")
+    else:
+        # 默认使用 Anthropic
+        from langchain_anthropic import ChatAnthropic
+
+        model_kwargs: dict[str, Any] = {
+            "model_name": model_name,
+        }
+        if api_key:
+            model_kwargs["api_key"] = api_key
+        if api_base:
+            model_kwargs["anthropic_api_url"] = api_base
+        if headers:
+            model_kwargs["default_headers"] = headers
+
+        model_instance = ChatAnthropic(**model_kwargs)
+        logger.info(f"Created Anthropic model: {model_name}, custom headers: {bool(headers)}")
+
+    return model_instance, provider, model_name
 
 
 def get_interrupt_config(config: Config) -> dict[str, bool] | None:

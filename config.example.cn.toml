@@ -35,6 +35,11 @@ enable_compact_tool = true
 # 需要审批的工具: execute, write_file, edit_file, web_search, task
 auto_approve = false
 
+# Bot 模式下是否显示工具执行进度（Telegram、Discord、飞书、钉钉等渠道）
+# 启用后用户可以看到中间步骤，如 "⏳ 执行命令..."、"⏳ 读取文件..."
+# 注意：根据渠道不同可能会产生多条消息
+# show_progress = false
+
 # ==================== LLM 提供商配置 ====================
 # DeepCoBot 支持任何 OpenAI 兼容的 API，请在下方配置你的提供商
 

@@ -35,6 +35,11 @@ enable_compact_tool = true
 # Tools requiring approval: execute, write_file, edit_file, web_search, task
 auto_approve = false
 
+# Show tool execution progress in bot mode (Telegram, Discord, Feishu, DingTalk)
+# When enabled, users will see intermediate steps like "⏳ execute...", "⏳ read_file..."
+# Note: This may generate multiple messages depending on the channel
+# show_progress = false
+
 # ==================== LLM Provider Configuration ====================
 # DeepCoBot supports any OpenAI-compatible API. Configure your provider below.
 

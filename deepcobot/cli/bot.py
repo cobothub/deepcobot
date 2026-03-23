@@ -98,6 +98,7 @@ async def _run_bot(cfg, lang: Language) -> None:
         """处理入站消息并返回响应"""
         nonlocal last_dispatch
         import time
+        import json
 
         # 记录上次交互渠道（排除 heartbeat 自身）
         if msg.channel != "heartbeat":
@@ -147,6 +148,81 @@ async def _run_bot(cfg, lang: Language) -> None:
             ))
 
         session.set_send_callback(send_callback)
+
+        # 进度消息列表
+        current_progress: list[str] = []
+
+        # 设置事件回调（用于显示执行进度）
+        async def event_callback(event: dict) -> None:
+            """处理流式事件的回调函数"""
+            nonlocal current_progress
+
+            if not cfg.agent.show_progress:
+                return
+
+            event_type = event.get("event")
+            event_name = event.get("name", "")
+            event_data = event.get("data", {})
+
+            # 工具调用开始
+            if event_type == "on_tool_start":
+                tool_name = event_name
+                tool_input = event_data.get("input", {})
+
+                # 获取渠道实例，判断是否使用 HTML 换行
+                channel = manager.channels.get(msg.channel)
+                use_html_br = channel and hasattr(channel, 'send_progress')  # 钉钉 AI Card 需要 <br>
+                line_break = "<br>" if use_html_br else "\n"
+
+                # 构建进度消息
+                progress_line = f"⏳ **{tool_name}**"
+                if isinstance(tool_input, dict):
+                    # 显示关键参数
+                    if tool_name == "execute" and "command" in tool_input:
+                        cmd = str(tool_input["command"])[:50]
+                        if len(str(tool_input["command"])) > 50:
+                            cmd += "..."
+                        progress_line += f"{line_break}`{cmd}`"
+                    elif tool_name in ("read_file", "write_file", "edit_file") and "file_path" in tool_input:
+                        progress_line += f"{line_break}📄 {tool_input['file_path']}"
+                    elif tool_name in ("glob", "grep") and "pattern" in tool_input:
+                        progress_line += f"{line_break}🔍 {tool_input['pattern']}"
+                    elif tool_name == "web_search" and "query" in tool_input:
+                        progress_line += f"{line_break}🌐 {tool_input['query'][:50]}"
+
+                current_progress.append(progress_line)
+
+                # 发送进度消息
+                # 钉钉用 <br> 换行，其他渠道用 \n
+                if channel and hasattr(channel, 'send_progress'):
+                    progress_content = "<br><br>".join(current_progress)
+                    try:
+                        await channel.send_progress(msg.chat_id, progress_content)
+                    except Exception as e:
+                        logger.debug(f"Failed to send progress: {e}")
+                else:
+                    # 其他渠道：只发送第一条进度（避免刷屏）
+                    if len(current_progress) == 1:
+                        progress_content = "\n\n".join(current_progress)
+                        await bus.publish_outbound(OutboundMessage(
+                            channel=msg.channel,
+                            chat_id=msg.chat_id,
+                            content=progress_content,
+                        ))
+
+            # 工具调用结束
+            elif event_type == "on_tool_end":
+                # 更新进度：将 ⏳ 改为 ✅
+                if current_progress:
+                    current_progress[-1] = current_progress[-1].replace("⏳", "✅")
+
+            # LLM 开始生成
+            elif event_type in ("on_chat_model_start", "on_llm_start"):
+                if cfg.agent.show_progress:
+                    thinking_line = "🤔 正在思考..."
+                    current_progress.append(thinking_line)
+
+        session.set_event_callback(event_callback)
 
         logger.debug(f"[Agent] Starting invoke for {msg.channel}:{msg.chat_id}")
         logger.debug(f"[Agent] Input: {msg.content[:200]}..." if len(msg.content) > 200 else f"[Agent] Input: {msg.content}")
